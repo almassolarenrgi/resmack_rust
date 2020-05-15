@@ -81,6 +81,23 @@ macro_rules! or {
     };
 }
 
+/*
+pub struct Ref {
+    refname: Box<dyn ToString>,
+    rule_set:
+}
+
+impl Ref {
+    pub fn new(refname: Box<ToString>) -> Ref {
+        Ref { refname: refname }
+    }
+}
+
+impl ToString for Ref {
+    fn to_string() -> String {}
+}
+*/
+
 // ----------------------------------------------------------------------------
 
 #[cfg(test)]
