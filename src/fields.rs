@@ -1,5 +1,6 @@
 #![macro_use]
 use super::random;
+use super::rules::RuleSet;
 use super::types::StringableVec;
 
 pub struct And {
@@ -81,27 +82,40 @@ macro_rules! or {
     };
 }
 
-/*
-pub struct Ref {
-    refname: Box<dyn ToString>,
-    rule_set:
+pub struct Ref<'a> {
+    ref_obj: Box<dyn ToString>,
+    ref_cat: String,
+    rule_set: &'a RuleSet,
 }
 
-impl Ref {
-    pub fn new(refname: Box<ToString>) -> Ref {
-        Ref { refname: refname }
+impl<'a> Ref<'a> {
+    pub fn new(rule_set: &'a RuleSet, ref_obj: Box<ToString>, ref_cat: String) -> Ref {
+        Ref {
+            rule_set: rule_set,
+            ref_obj: ref_obj,
+            ref_cat: ref_cat,
+        }
     }
 }
 
-impl ToString for Ref {
-    fn to_string() -> String {}
+impl<'a> ToString for Ref<'a> {
+    fn to_string(&self) -> String {
+        let ref_name = self.ref_obj.to_string();
+        let rule = self
+            .rule_set
+            .get_rule(self.ref_cat.clone(), ref_name)
+            .expect("Rule does not exist");
+        rule.value.to_string()
+    }
 }
-*/
 
 // ----------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::rules;
+
     #[test]
     fn and_macro() {
         let and_test = and!("Hello", "World");
@@ -126,4 +140,11 @@ mod tests {
             .count();
         assert_eq!(matches, 1);
     }
+
+    /*
+    fn ref_raw() {
+        let mut rule_set = RuleSet::new();
+        rule_set.add_rule(rule!("Test Rule", "Hello World"));
+    }
+    */
 }

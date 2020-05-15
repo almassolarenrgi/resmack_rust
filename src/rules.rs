@@ -44,7 +44,7 @@ impl RuleSet {
         self
     }
 
-    pub fn get_rule<'a>(&'a mut self, cat: String, rule_name: String) -> Option<&'a Rule> {
+    pub fn get_rule<'a>(&'a self, cat: String, rule_name: String) -> Option<&'a Rule> {
         let category = match self.categories.get(&cat) {
             Some(v) => v,
             None => return None,
