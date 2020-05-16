@@ -28,7 +28,7 @@ pub fn main() {
 
     let start = time::Instant::now();
     let mut total_size: usize = 0;
-    let total_seconds = 10;
+    let total_seconds = 3;
     while (time::Instant::now() - start).as_millis() < (total_seconds * 1000) {
         let output = rules.build_rule(String::from("test"), String::from("TestRule2"));
         total_size += output.len();
@@ -36,6 +36,6 @@ pub fn main() {
     let end = time::Instant::now();
     println!(
         "{} MiB/s",
-        (total_size as f64 / (1024.0 * 1024.0)) / total_seconds as f64
+        (total_size as f64 / (1024.0 * 1024.0)) / (end - start).as_secs_f64(),
     );
 }
