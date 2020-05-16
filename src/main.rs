@@ -27,10 +27,15 @@ pub fn main() {
         .add_rule(rule!("TestRule2", "---World"));
 
     let start = time::Instant::now();
-    let iters = 10_000_000;
-    for _ in 0..iters {
-        rules.build_rule(String::from("test"), String::from("TestRule2"));
+    let mut total_size: usize = 0;
+    let total_seconds = 10;
+    while (time::Instant::now() - start).as_millis() < (total_seconds * 1000) {
+        let output = rules.build_rule(String::from("test"), String::from("TestRule2"));
+        total_size += output.len();
     }
     let end = time::Instant::now();
-    println!("{} iters/s", iters as f64 / (end - start).as_secs_f64());
+    println!(
+        "{} MiB/s",
+        (total_size as f64 / (1024.0 * 1024.0)) / total_seconds as f64
+    );
 }
