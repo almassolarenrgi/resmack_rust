@@ -18,6 +18,10 @@ impl RuleSet {
         }
     }
 
+    fn as_rule_builder(&self) -> &dyn RuleBuilder {
+        self
+    }
+
     pub fn set_category(mut self, cat: String) -> Self {
         self.curr_category = cat.clone();
         self
@@ -62,7 +66,7 @@ impl RuleSet {
 impl RuleBuilder for RuleSet {
     fn build_rule<'a>(&'a self, cat: String, rule_name: String) -> String {
         let rule = self.get_rule(cat, rule_name).expect("Rule not found");
-        rule.value.build(&Box::new(self))
+        rule.value.build(self.as_rule_builder())
     }
 }
 
@@ -95,9 +99,8 @@ mod tests {
         }
     }
     impl FakeBuilder {
-        fn new_boxed<'a>() -> BoxedRuleBuilder<'a> {
-            let res: BoxedRuleBuilder = Box::new(&FakeBuilder {});
-            res
+        fn as_rule_builder(&self) -> &dyn RuleBuilder {
+            self
         }
     }
 
@@ -132,7 +135,7 @@ mod tests {
     #[test]
     fn rule_set_chooses_random_rule() {
         let mut counts: HashMap<String, u32> = HashMap::new();
-        let faker = FakeBuilder::new_boxed();
+        let faker = FakeBuilder {};
 
         let rules = RuleSet::new();
         let rules = rules
@@ -145,7 +148,7 @@ mod tests {
                 .get_rule(String::from("test"), String::from("TestRule"))
                 .unwrap()
                 .value
-                .build(&faker);
+                .build(faker.as_rule_builder());
 
             *counts.entry(res).or_insert(0) += 1;
         }

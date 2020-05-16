@@ -10,14 +10,14 @@ pub trait RuleBuilder {
 }
 
 pub trait Buildable {
-    fn build(&self, rule_builder: &BoxedRuleBuilder) -> String;
+    fn build(&self, rule_builder: &dyn RuleBuilder) -> String;
 }
 
 impl<T> Buildable for T
 where
     T: ToString,
 {
-    fn build(&self, _: &BoxedRuleBuilder) -> String {
+    fn build(&self, _: &dyn RuleBuilder) -> String {
         self.to_string()
     }
 }

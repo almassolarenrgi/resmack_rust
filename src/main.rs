@@ -27,7 +27,7 @@ pub fn main() {
         .add_rule(rule!("TestRule2", "---World"));
 
     let start = time::Instant::now();
-    let iters = 1_000_000;
+    let iters = 10_000_000;
     for _ in 0..iters {
         rules.build_rule(String::from("test"), String::from("TestRule2"));
     }
