@@ -1,3 +1,4 @@
+mod collections;
 mod fields;
 mod random;
 mod rules;

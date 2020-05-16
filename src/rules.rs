@@ -1,32 +1,32 @@
 #![macro_use]
 use std::collections::HashMap;
-use std::time;
 
+use super::collections::{new_fast_long_hash, new_fast_short_hash, FastLongHash, FastShortHash};
 use super::random::Rand;
 use super::types::*;
 
 pub struct RuleSet {
-    pub categories: HashMap<String, HashMap<String, Vec<Rule>>>,
+    pub categories: FastShortHash<String, FastLongHash<String, Vec<Rule>>>,
     pub curr_category: String,
 }
 
 impl RuleSet {
     pub fn new() -> RuleSet {
         RuleSet {
-            categories: HashMap::new(),
+            categories: new_fast_short_hash(),
             curr_category: "".to_string(),
         }
     }
 
     pub fn set_category(mut self, cat: String) -> Self {
-        self.curr_category = cat;
+        self.curr_category = cat.clone();
         self
     }
 
     pub fn add_rule(mut self, rule: Rule) -> Self {
         let cat = &self.curr_category;
         if !self.categories.contains_key(cat) {
-            self.categories.insert(cat.clone(), HashMap::new());
+            self.categories.insert(cat.clone(), new_fast_long_hash());
         }
         let cat_map = self
             .categories
