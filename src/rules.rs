@@ -1,8 +1,9 @@
 #![macro_use]
 use std::collections::HashMap;
+use std::time;
 
 use super::random::Rand;
-use super::types::StringableVec;
+use super::types::*;
 
 pub struct RuleSet {
     pub categories: HashMap<String, HashMap<String, Vec<Rule>>>,
@@ -58,15 +59,22 @@ impl RuleSet {
     }
 }
 
+impl RuleBuilder for RuleSet {
+    fn build_rule<'a>(&'a self, cat: String, rule_name: String) -> String {
+        let rule = self.get_rule(cat, rule_name).expect("Rule not found");
+        rule.value.build(&Box::new(self))
+    }
+}
+
 pub struct Rule {
     pub name: String,
-    pub value: Box<dyn ToString>,
+    pub value: BoxedBuildable,
 }
 
 #[macro_export]
 macro_rules! rule {
     ( $name:expr, $( $item:expr ), *) => {
-        Rule {
+        crate::rules::Rule {
             name: $name.to_string(),
             value: Box::new(and!( $($item), *)),
         }
@@ -76,6 +84,22 @@ macro_rules! rule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fields;
+    use crate::types;
+    use crate::types::*;
+
+    struct FakeBuilder {}
+    impl RuleBuilder for FakeBuilder {
+        fn build_rule<'a>(&'a self, cat: String, ref_name: String) -> String {
+            panic!("Rule building not supported");
+        }
+    }
+    impl FakeBuilder {
+        fn new_boxed<'a>() -> BoxedRuleBuilder<'a> {
+            let res: BoxedRuleBuilder = Box::new(&FakeBuilder {});
+            res
+        }
+    }
 
     #[test]
     fn rule_set_creation() {
@@ -108,9 +132,10 @@ mod tests {
     #[test]
     fn rule_set_chooses_random_rule() {
         let mut counts: HashMap<String, u32> = HashMap::new();
+        let faker = FakeBuilder::new_boxed();
 
         let rules = RuleSet::new();
-        let mut rules = rules
+        let rules = rules
             .set_category("test".to_string())
             .add_rule(rule!("TestRule", "Hello", "World"))
             .add_rule(rule!("TestRule", "Goodbye", "Hello"));
@@ -120,7 +145,7 @@ mod tests {
                 .get_rule(String::from("test"), String::from("TestRule"))
                 .unwrap()
                 .value
-                .to_string();
+                .build(&faker);
 
             *counts.entry(res).or_insert(0) += 1;
         }
@@ -131,5 +156,36 @@ mod tests {
         let v2 = *counts.get("GoodbyeHello").unwrap() as f32;
         let diff: f32 = (1.0 - (v1 / v2)).abs();
         assert_eq!(diff < 0.1, true); // should be roughly the same probabilities
+    }
+
+    #[test]
+    fn rule_set_ref() {
+        let rules = RuleSet::new();
+        let rules = rules
+            .set_category(String::from("test"))
+            .add_rule(rule!("RefdRule", "Hello"))
+            .add_rule(rule!(
+                "TestRule",
+                fields::Ref::new(String::from("test"), String::from("RefdRule")),
+                "World"
+            ));
+        let res = rules.build_rule(String::from("test"), String::from("TestRule"));
+        assert_eq!(res, "HelloWorld");
+    }
+
+    #[test]
+    fn rule_ref_macro_test() {
+        let rules = RuleSet::new();
+        let rules = rules
+            .set_category(String::from("test"))
+            .add_rule(rule!("RefdRule", "Hello"))
+            .add_rule(rule!("TestRule", reff!("test", "RefdRule"), "World"))
+            .add_rule(rule!("TestRule2", reff!("test", "TestRule"), "World"));
+
+        let res = rules.build_rule(String::from("test"), String::from("TestRule"));
+        assert_eq!(res, "HelloWorld");
+
+        let res = rules.build_rule(String::from("test"), String::from("TestRule2"));
+        assert_eq!(res, "HelloWorldWorld");
     }
 }

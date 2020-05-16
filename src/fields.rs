@@ -1,12 +1,15 @@
 #![macro_use]
 use super::random;
+use super::rules;
 use super::rules::RuleSet;
-use super::types::StringableVec;
+use super::types::*;
 
 pub struct And {
-    pub items: StringableVec,
+    pub items: BuildableVec,
     pub sep: String,
 }
+
+// ----------------------------------------------------------------------------
 
 impl And {
     pub fn new(sep: &str) -> And {
@@ -16,20 +19,20 @@ impl And {
         }
     }
 
-    pub fn item(mut self, item: impl ToString + 'static) -> Self {
+    pub fn item(mut self, item: impl Buildable + 'static) -> Self {
         self.items.push(Box::new(item));
         self
     }
 }
 
-impl ToString for And {
-    fn to_string(&self) -> String {
+impl Buildable for And {
+    fn build(&self, cb: &BoxedRuleBuilder) -> String {
         let mut res = String::new();
         for (idx, item) in self.items.iter().enumerate() {
             if idx > 0 {
                 res += &self.sep;
             }
-            res += &item.to_string();
+            res += &item.build(cb);
         }
         res
     }
@@ -47,8 +50,10 @@ macro_rules! and {
     };
 }
 
+// ----------------------------------------------------------------------------
+
 pub struct Or {
-    pub items: StringableVec,
+    pub items: BuildableVec,
 }
 
 impl Or {
@@ -56,20 +61,20 @@ impl Or {
         Or { items: vec![] }
     }
 
-    pub fn item(mut self, item: impl ToString + 'static) -> Self {
+    pub fn item(mut self, item: impl Buildable + 'static) -> Self {
         self.items.push(Box::new(item));
         self
     }
 }
 
-impl ToString for Or {
-    fn to_string(&self) -> String {
+impl Buildable for Or {
+    fn build(&self, cb: &BoxedRuleBuilder) -> String {
         if self.items.len() == 0 {
             return String::from("");
         }
         let rand_idx = random::Rand::rand_int(0, self.items.len());
         let chosen_item = &self.items[rand_idx];
-        chosen_item.to_string()
+        chosen_item.build(cb)
     }
 }
 
@@ -82,31 +87,34 @@ macro_rules! or {
     };
 }
 
-pub struct Ref<'a> {
-    ref_obj: Box<dyn ToString>,
+// ----------------------------------------------------------------------------
+
+pub struct Ref {
+    ref_name: String,
     ref_cat: String,
-    rule_set: &'a RuleSet,
 }
 
-impl<'a> Ref<'a> {
-    pub fn new(rule_set: &'a RuleSet, ref_obj: Box<ToString>, ref_cat: String) -> Ref {
+impl Ref {
+    pub fn new(ref_cat: String, ref_name: String) -> Ref {
         Ref {
-            rule_set: rule_set,
-            ref_obj: ref_obj,
+            ref_name: ref_name,
             ref_cat: ref_cat,
         }
     }
 }
 
-impl<'a> ToString for Ref<'a> {
-    fn to_string(&self) -> String {
-        let ref_name = self.ref_obj.to_string();
-        let rule = self
-            .rule_set
-            .get_rule(self.ref_cat.clone(), ref_name)
-            .expect("Rule does not exist");
-        rule.value.to_string()
+impl Buildable for Ref {
+    fn build(&self, c: &BoxedRuleBuilder) -> String {
+        c.build_rule(self.ref_cat.clone(), self.ref_name.clone())
     }
+}
+
+#[macro_export]
+macro_rules! reff {
+    // all arguments specified, sep first
+    ( $cat:expr, $ref_name:expr ) => {
+        crate::fields::Ref::new($cat.to_string(), $ref_name.to_string())
+    };
 }
 
 // ----------------------------------------------------------------------------
@@ -116,35 +124,44 @@ mod tests {
     use super::*;
     use crate::rules;
 
+    struct FakeBuilder {}
+    impl RuleBuilder for FakeBuilder {
+        fn build_rule<'a>(&'a self, cat: String, ref_name: String) -> String {
+            panic!("Rule building not supported");
+        }
+    }
+    impl FakeBuilder {
+        fn new_boxed<'a>() -> BoxedRuleBuilder<'a> {
+            let res: BoxedRuleBuilder = Box::new(&FakeBuilder {});
+            res
+        }
+    }
+
     #[test]
     fn and_macro() {
+        let faker = FakeBuilder::new_boxed();
         let and_test = and!("Hello", "World");
-        assert_eq!(and_test.to_string(), "HelloWorld");
+        assert_eq!(and_test.build(&faker), "HelloWorld");
     }
 
     #[test]
     fn and_macro_with_sep() {
+        let faker = FakeBuilder::new_boxed();
         let and_test = and!(sep = "*", "Hello", "World");
-        assert_eq!(and_test.to_string(), "Hello*World");
+        assert_eq!(and_test.build(&faker), "Hello*World");
     }
 
     #[test]
     fn or_macro() {
+        let faker = FakeBuilder::new_boxed();
         let or_test = or!("Hello", "World");
-        let built = or_test.to_string();
+        let built = or_test.build(&faker);
 
         let matches = or_test
             .items
             .iter()
-            .filter(|item| item.to_string() == built)
+            .filter(|item| item.build(&faker) == built)
             .count();
         assert_eq!(matches, 1);
     }
-
-    /*
-    fn ref_raw() {
-        let mut rule_set = RuleSet::new();
-        rule_set.add_rule(rule!("Test Rule", "Hello World"));
-    }
-    */
 }
