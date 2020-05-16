@@ -26,7 +26,7 @@ impl And {
 }
 
 impl Buildable for And {
-    fn build(&self, cb: &BoxedRuleBuilder) -> String {
+    fn build(&self, cb: &dyn RuleBuilder) -> String {
         let mut res = String::new();
         for (idx, item) in self.items.iter().enumerate() {
             if idx > 0 {
@@ -68,7 +68,7 @@ impl Or {
 }
 
 impl Buildable for Or {
-    fn build(&self, cb: &BoxedRuleBuilder) -> String {
+    fn build(&self, cb: &dyn RuleBuilder) -> String {
         if self.items.len() == 0 {
             return String::from("");
         }
@@ -104,8 +104,8 @@ impl Ref {
 }
 
 impl Buildable for Ref {
-    fn build(&self, c: &BoxedRuleBuilder) -> String {
-        c.build_rule(self.ref_cat.clone(), self.ref_name.clone())
+    fn build(&self, cb: &dyn RuleBuilder) -> String {
+        cb.build_rule(self.ref_cat.clone(), self.ref_name.clone())
     }
 }
 
@@ -131,36 +131,35 @@ mod tests {
         }
     }
     impl FakeBuilder {
-        fn new_boxed<'a>() -> BoxedRuleBuilder<'a> {
-            let res: BoxedRuleBuilder = Box::new(&FakeBuilder {});
-            res
+        fn as_rule_builder(&self) -> &dyn RuleBuilder {
+            self
         }
     }
 
     #[test]
     fn and_macro() {
-        let faker = FakeBuilder::new_boxed();
+        let mut faker = FakeBuilder {};
         let and_test = and!("Hello", "World");
-        assert_eq!(and_test.build(&faker), "HelloWorld");
+        assert_eq!(and_test.build(faker.as_rule_builder()), "HelloWorld");
     }
 
     #[test]
     fn and_macro_with_sep() {
-        let faker = FakeBuilder::new_boxed();
+        let faker = FakeBuilder {};
         let and_test = and!(sep = "*", "Hello", "World");
-        assert_eq!(and_test.build(&faker), "Hello*World");
+        assert_eq!(and_test.build(faker.as_rule_builder()), "Hello*World");
     }
 
     #[test]
     fn or_macro() {
-        let faker = FakeBuilder::new_boxed();
+        let faker = FakeBuilder {};
         let or_test = or!("Hello", "World");
-        let built = or_test.build(&faker);
+        let built = or_test.build(faker.as_rule_builder());
 
         let matches = or_test
             .items
             .iter()
-            .filter(|item| item.build(&faker) == built)
+            .filter(|item| item.build(faker.as_rule_builder()) == built)
             .count();
         assert_eq!(matches, 1);
     }
