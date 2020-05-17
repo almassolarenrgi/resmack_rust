@@ -10,6 +10,7 @@ edition = "2018"
 rand = ""
 twox-hash = "*"
 fnv = "*"
+num = "*"
 
 [profile.dev]
 opt-level = 0
