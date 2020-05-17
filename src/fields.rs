@@ -36,6 +36,12 @@ impl Buildable for And {
         }
         res
     }
+
+    fn finalize(&mut self, info_fetcher: &dyn InfoFetcher) {
+        for item in self.items.iter_mut() {
+            item.finalize(info_fetcher);
+        }
+    }
 }
 
 #[macro_export]
@@ -76,6 +82,12 @@ impl Buildable for Or {
         let chosen_item = &self.items[rand_idx];
         chosen_item.build(cb)
     }
+
+    fn finalize(&mut self, info_fetcher: &dyn InfoFetcher) {
+        for item in self.items.iter_mut() {
+            item.finalize(info_fetcher);
+        }
+    }
 }
 
 #[macro_export]
@@ -92,6 +104,7 @@ macro_rules! or {
 pub struct Ref {
     ref_name: String,
     ref_cat: String,
+    ref_info: Option<RuleInfo>,
 }
 
 impl Ref {
@@ -99,13 +112,27 @@ impl Ref {
         Ref {
             ref_name: ref_name,
             ref_cat: ref_cat,
+            ref_info: None,
         }
     }
 }
 
 impl Buildable for Ref {
     fn build(&self, cb: &dyn RuleBuilder) -> String {
-        cb.build_rule(self.ref_cat.clone(), self.ref_name.clone())
+        let ref_info = self
+            .ref_info
+            .expect("ref_info was None. Was the ruleset not finalized?");
+        cb.build_rule(ref_info)
+    }
+
+    fn finalize(&mut self, info_fetcher: &dyn InfoFetcher) {
+        match self.ref_info {
+            Some(_) => return,
+            None => {
+                self.ref_info =
+                    info_fetcher.get_rule_info(self.ref_cat.clone(), self.ref_name.clone());
+            }
+        }
     }
 }
 
@@ -126,7 +153,10 @@ mod tests {
 
     struct FakeBuilder {}
     impl RuleBuilder for FakeBuilder {
-        fn build_rule<'a>(&'a self, cat: String, ref_name: String) -> String {
+        fn build_rule_slow<'a>(&'a mut self, _: String, _: String) -> String {
+            panic!("Rule building not supported");
+        }
+        fn build_rule<'a>(&'a self, _: RuleInfo) -> String {
             panic!("Rule building not supported");
         }
     }
@@ -138,7 +168,7 @@ mod tests {
 
     #[test]
     fn and_macro() {
-        let mut faker = FakeBuilder {};
+        let faker = FakeBuilder {};
         let and_test = and!("Hello", "World");
         assert_eq!(and_test.build(faker.as_rule_builder()), "HelloWorld");
     }
