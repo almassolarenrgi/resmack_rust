@@ -25,14 +25,25 @@ pub trait Buildable {
     }
 }
 
-impl Buildable for str {
+impl Buildable for &str {
     fn build(&self, output: &mut String, rule_builder: &dyn RuleBuilder) {
-        println!("Building with str");
-        panic!("YOYOYOYOYO");
         output.push_str(self);
     }
 }
 
+impl Buildable for i32 {
+    fn build(&self, output: &mut String, rule_builder: &dyn RuleBuilder) {
+        output.push_str(&self.to_string());
+    }
+}
+
+impl Buildable for f64 {
+    fn build(&self, output: &mut String, rule_builder: &dyn RuleBuilder) {
+        output.push_str(&self.to_string());
+    }
+}
+
+/*
 impl<T> Buildable for T
 where
     T: ToString,
@@ -41,6 +52,7 @@ where
         output.push_str(&self.to_string());
     }
 }
+*/
 
 pub struct RuleInfo {
     pub cat_idx: usize,
