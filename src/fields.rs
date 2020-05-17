@@ -1,7 +1,5 @@
 #![macro_use]
 use super::random;
-use super::rules;
-use super::rules::RuleSet;
 use super::types::*;
 
 pub struct And {
@@ -27,7 +25,6 @@ impl And {
 
 impl Buildable for And {
     fn build(&self, output: &mut String, cb: &dyn RuleBuilder) {
-        let mut res = String::new();
         for (idx, item) in self.items.iter().enumerate() {
             if idx > 0 {
                 output.push_str(&self.sep);
@@ -158,7 +155,7 @@ mod tests {
         fn build_rule_slow<'a>(&'a mut self, _: String, _: String) -> String {
             panic!("Rule building not supported");
         }
-        fn get_rule<'a>(&'a self, rule_info: RuleInfo) -> Option<&rules::Rule> {
+        fn get_rule<'a>(&'a self, _: RuleInfo) -> Option<&rules::Rule> {
             panic!("Rule building not supported");
         }
         fn build_rule<'a>(&'a self, _: RuleInfo) -> String {

@@ -1,7 +1,4 @@
-#![macro_use]
-use std::collections::HashMap;
-
-use super::collections::{new_fast_long_hash, new_fast_short_hash, FastLongHash, FastShortHash};
+use super::collections::{new_fast_short_hash, FastShortHash};
 use super::random::Rand;
 use super::types::*;
 
@@ -46,14 +43,6 @@ impl RuleSet {
                 }
             }
         }
-    }
-
-    fn as_rule_builder(&self) -> &dyn RuleBuilder {
-        self
-    }
-
-    fn as_rule_builder_mut(&mut self) -> &dyn RuleBuilder {
-        self
     }
 
     pub fn set_category(mut self, cat: String) -> Self {
@@ -109,7 +98,7 @@ impl RuleBuilder for RuleSet {
     fn build_rule<'a>(&self, rule_info: RuleInfo) -> String {
         let rule = self.get_rule(rule_info).expect("Rule not found");
         let mut res = String::new();
-        rule.value.build(&mut res, self.as_rule_builder());
+        rule.value.build(&mut res, self);
         res
     }
 
@@ -173,24 +162,18 @@ macro_rules! rule {
 mod tests {
     use super::*;
     use crate::fields;
-    use crate::types;
-    use crate::types::*;
+    use std::collections::HashMap;
 
     struct FakeBuilder {}
     impl RuleBuilder for FakeBuilder {
-        fn build_rule_slow<'a>(&'a mut self, cat: String, rule_name: String) -> String {
+        fn build_rule_slow<'a>(&'a mut self, _: String, _: String) -> String {
             panic!("Rule building not supported");
         }
-        fn get_rule<'a>(&'a self, rule_info: RuleInfo) -> Option<&Rule> {
+        fn get_rule<'a>(&'a self, _: RuleInfo) -> Option<&Rule> {
             panic!("Rule building not supported");
         }
-        fn build_rule<'a>(&'a self, rule_info: RuleInfo) -> String {
+        fn build_rule<'a>(&'a self, _: RuleInfo) -> String {
             panic!("Rule building not supported");
-        }
-    }
-    impl FakeBuilder {
-        fn as_rule_builder(&self) -> &dyn RuleBuilder {
-            self
         }
     }
 
@@ -231,7 +214,6 @@ mod tests {
     #[test]
     fn rule_set_chooses_random_rule() {
         let mut counts: HashMap<String, u32> = HashMap::new();
-        let faker = FakeBuilder {};
 
         let rules = RuleSet::new();
         let rules = rules

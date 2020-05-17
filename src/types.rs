@@ -1,10 +1,7 @@
-#[feature(type_alias_impl_trait)]
 use crate::rules::Rule;
 
 pub type BoxedBuildable = Box<dyn Buildable>;
 pub type BuildableVec = Vec<BoxedBuildable>;
-pub type BoxedRuleBuilder<'a> = Box<&'a dyn RuleBuilder>;
-pub type OptRuleBuilder<'a> = Option<BoxedRuleBuilder<'a>>;
 
 pub trait RuleBuilder {
     fn get_rule(&self, rule_info: RuleInfo) -> Option<&Rule>;
@@ -26,19 +23,19 @@ pub trait Buildable {
 }
 
 impl Buildable for &str {
-    fn build(&self, output: &mut String, rule_builder: &dyn RuleBuilder) {
+    fn build(&self, output: &mut String, _: &dyn RuleBuilder) {
         output.push_str(self);
     }
 }
 
 impl Buildable for i32 {
-    fn build(&self, output: &mut String, rule_builder: &dyn RuleBuilder) {
+    fn build(&self, output: &mut String, _: &dyn RuleBuilder) {
         output.push_str(&self.to_string());
     }
 }
 
 impl Buildable for f64 {
-    fn build(&self, output: &mut String, rule_builder: &dyn RuleBuilder) {
+    fn build(&self, output: &mut String, _: &dyn RuleBuilder) {
         output.push_str(&self.to_string());
     }
 }
