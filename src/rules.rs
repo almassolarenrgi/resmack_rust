@@ -6,19 +6,53 @@ use super::random::Rand;
 use super::types::*;
 
 pub struct RuleSet {
-    pub categories: FastShortHash<String, FastLongHash<String, Vec<Rule>>>,
+    pub cat_names: FastShortHash<String, usize>,
+    // key is "category:rulename"
+    pub rule_names: FastShortHash<String, usize>,
+
+    /*
+     *  // categories
+     *  [
+     *      // category, idx = 0
+     *      [
+     *          // rule, idx = 0
+     *          [ Rule1, Rule2, Rule3 ],
+     *      ]
+     *  ]
+     */
+    pub categories: Vec<Vec<Vec<Rule>>>,
     pub curr_category: String,
 }
 
 impl RuleSet {
     pub fn new() -> RuleSet {
         RuleSet {
-            categories: new_fast_short_hash(),
+            cat_names: new_fast_short_hash(),
+            rule_names: new_fast_short_hash(),
+
+            categories: Vec::new(),
             curr_category: "".to_string(),
         }
     }
 
+    pub fn finalize(&mut self) {
+        let info_fetcher: RuleInfoFetcher = RuleInfoFetcher::new(&self.cat_names, &self.rule_names);
+
+        // resolve all Refs that have been added to the ruleset
+        for cat in self.categories.iter_mut() {
+            for rule_list in cat.iter_mut() {
+                for rule in rule_list.iter_mut() {
+                    rule.finalize(&info_fetcher);
+                }
+            }
+        }
+    }
+
     fn as_rule_builder(&self) -> &dyn RuleBuilder {
+        self
+    }
+
+    fn as_rule_builder_mut(&mut self) -> &dyn RuleBuilder {
         self
     }
 
@@ -29,50 +63,98 @@ impl RuleSet {
 
     pub fn add_rule(mut self, rule: Rule) -> Self {
         let cat = &self.curr_category;
-        if !self.categories.contains_key(cat) {
-            self.categories.insert(cat.clone(), new_fast_long_hash());
-        }
-        let cat_map = self
-            .categories
-            .get_mut(cat)
-            .expect("Could not lookup category");
+        let cat_idx = match self.cat_names.get(cat) {
+            Some(v) => *v,
+            None => {
+                let tmp_idx = self.categories.len();
+                self.cat_names.insert(cat.clone(), tmp_idx);
+                self.categories.push(Vec::new());
+                tmp_idx
+            }
+        };
 
-        if !cat_map.contains_key(&rule.name) {
-            cat_map.insert(rule.name.clone(), Vec::new());
-        }
-        let rule_list = cat_map
-            .get_mut(&rule.name)
-            .expect("Could not fetch rule list");
+        let cat_vec = self.categories.get_mut(cat_idx).expect("Shouldn't happen");
 
+        let rule_key = format!("{}:{}", cat, rule.name);
+        let rule_idx = match self.rule_names.get(&rule_key) {
+            Some(v) => *v,
+            None => {
+                let tmp_idx = cat_vec.len();
+                self.rule_names.insert(rule_key, tmp_idx);
+                cat_vec.push(Vec::new());
+                tmp_idx
+            }
+        };
+
+        let rule_list = cat_vec.get_mut(rule_idx).expect("Shouldn't happen");
         rule_list.push(rule);
 
         self
     }
 
-    pub fn get_rule<'a>(&'a self, cat: String, rule_name: String) -> Option<&'a Rule> {
-        let category = match self.categories.get(&cat) {
-            Some(v) => v,
-            None => return None,
-        };
-        let rule_list = match category.get(&rule_name) {
-            Some(v) => v,
-            None => return Option::None,
-        };
+    pub fn get_rule_info(&self, cat_name: String, rule_name: String) -> Option<RuleInfo> {
+        let info_fetcher: RuleInfoFetcher = RuleInfoFetcher::new(&self.cat_names, &self.rule_names);
+        info_fetcher.get_rule_info(cat_name, rule_name)
+    }
+
+    pub fn get_rule<'a>(&'a self, info: RuleInfo) -> Option<&'a Rule> {
+        let cat_list = self.categories.get(info.cat_idx)?;
+        let rule_list = cat_list.get(info.rule_idx)?;
         let rand_idx = Rand::rand_int(0, rule_list.len());
         Some(&rule_list[rand_idx])
     }
 }
 
 impl RuleBuilder for RuleSet {
-    fn build_rule<'a>(&'a self, cat: String, rule_name: String) -> String {
-        let rule = self.get_rule(cat, rule_name).expect("Rule not found");
+    fn build_rule<'a>(&self, rule_info: RuleInfo) -> String {
+        let rule = self.get_rule(rule_info).expect("Rule not found");
         rule.value.build(self.as_rule_builder())
+    }
+
+    fn build_rule_slow<'a>(&mut self, cat: String, rule_name: String) -> String {
+        let info_fetcher: RuleInfoFetcher = RuleInfoFetcher::new(&self.cat_names, &self.rule_names);
+        self.build_rule(
+            info_fetcher
+                .get_rule_info(cat, rule_name)
+                .expect("Rule not found"),
+        )
+    }
+}
+
+pub struct RuleInfoFetcher<'a> {
+    cat_names: &'a FastShortHash<String, usize>,
+    rule_names: &'a FastShortHash<String, usize>,
+}
+
+impl<'a> RuleInfoFetcher<'a> {
+    fn new<'b>(
+        cat_names: &'b FastShortHash<String, usize>,
+        rule_names: &'b FastShortHash<String, usize>,
+    ) -> RuleInfoFetcher<'b> {
+        RuleInfoFetcher {
+            cat_names: cat_names,
+            rule_names: rule_names,
+        }
+    }
+}
+
+impl<'a> InfoFetcher for RuleInfoFetcher<'a> {
+    fn get_rule_info(&self, cat: String, rule_name: String) -> Option<RuleInfo> {
+        let cat_idx: usize = *self.cat_names.get(&cat)?;
+        let rule_idx = *self.rule_names.get(&format!("{}:{}", cat, rule_name))?;
+        Some(RuleInfo { cat_idx, rule_idx })
     }
 }
 
 pub struct Rule {
     pub name: String,
     pub value: BoxedBuildable,
+}
+
+impl Rule {
+    pub fn finalize(&mut self, info_fetcher: &dyn InfoFetcher) {
+        self.value.finalize(info_fetcher);
+    }
 }
 
 #[macro_export]
@@ -94,7 +176,10 @@ mod tests {
 
     struct FakeBuilder {}
     impl RuleBuilder for FakeBuilder {
-        fn build_rule<'a>(&'a self, cat: String, ref_name: String) -> String {
+        fn build_rule_slow<'a>(&'a mut self, cat: String, rule_name: String) -> String {
+            panic!("Rule building not supported");
+        }
+        fn build_rule<'a>(&'a self, rule_info: RuleInfo) -> String {
             panic!("Rule building not supported");
         }
     }
@@ -106,14 +191,13 @@ mod tests {
 
     #[test]
     fn rule_set_creation() {
-        let set = RuleSet::new();
-        let set = set.add_rule(Rule {
+        let mut set = RuleSet::new();
+        set = set.set_category(String::from("test"));
+        set = set.add_rule(Rule {
             name: "Test Rule".to_string(),
             value: Box::new("Hello"),
         });
-        if set.categories.contains_key("test") {
-            println!("Hello");
-        }
+        assert_eq!(set.cat_names.contains_key("test"), true);
     }
 
     #[test]
@@ -123,13 +207,20 @@ mod tests {
             .set_category("test".to_string())
             .add_rule(rule!("TestRule", "Hello", "World"))
             .add_rule(rule!("TestRule", "Hello", "world"));
-        assert_eq!(rules.categories.contains_key("test"), true);
+        assert_eq!(rules.cat_names.contains_key("test"), true);
 
-        let test_map = rules.categories.get("test").unwrap();
-        assert_eq!(test_map.contains_key("TestRule"), true);
+        let rule_key = "test:TestRule";
+        assert_eq!(rules.rule_names.contains_key(rule_key), true);
 
-        let test_rules = test_map.get("TestRule").unwrap();
-        assert_eq!(test_rules.len(), 2);
+        let rule_info = rules
+            .get_rule_info(String::from("test"), String::from("TestRule"))
+            .expect("Should exist");
+        let cat_list = rules
+            .categories
+            .get(rule_info.cat_idx)
+            .expect("Should exist");
+        let rule_list = cat_list.get(rule_info.rule_idx).expect("Should exist");
+        assert_eq!(rule_list.len(), 2);
     }
 
     #[test]
@@ -143,13 +234,12 @@ mod tests {
             .add_rule(rule!("TestRule", "Hello", "World"))
             .add_rule(rule!("TestRule", "Goodbye", "Hello"));
 
-        for _ in 0..10_000 {
-            let res = rules
-                .get_rule(String::from("test"), String::from("TestRule"))
-                .unwrap()
-                .value
-                .build(faker.as_rule_builder());
+        let rule_info = rules
+            .get_rule_info(String::from("test"), String::from("TestRule"))
+            .expect("Should exist");
 
+        for _ in 0..10_000 {
+            let res = rules.build_rule(rule_info);
             *counts.entry(res).or_insert(0) += 1;
         }
 
@@ -163,8 +253,8 @@ mod tests {
 
     #[test]
     fn rule_set_ref() {
-        let rules = RuleSet::new();
-        let rules = rules
+        let mut rules = RuleSet::new();
+        rules = rules
             .set_category(String::from("test"))
             .add_rule(rule!("RefdRule", "Hello"))
             .add_rule(rule!(
@@ -172,23 +262,28 @@ mod tests {
                 fields::Ref::new(String::from("test"), String::from("RefdRule")),
                 "World"
             ));
-        let res = rules.build_rule(String::from("test"), String::from("TestRule"));
+        rules.finalize();
+        let rule_info = rules
+            .get_rule_info(String::from("test"), String::from("TestRule"))
+            .expect("Should exist");
+        let res = rules.build_rule(rule_info);
         assert_eq!(res, "HelloWorld");
     }
 
     #[test]
     fn rule_ref_macro_test() {
         let rules = RuleSet::new();
-        let rules = rules
+        let mut rules = rules
             .set_category(String::from("test"))
             .add_rule(rule!("RefdRule", "Hello"))
             .add_rule(rule!("TestRule", reff!("test", "RefdRule"), "World"))
             .add_rule(rule!("TestRule2", reff!("test", "TestRule"), "World"));
+        rules.finalize();
 
-        let res = rules.build_rule(String::from("test"), String::from("TestRule"));
+        let res = rules.build_rule_slow(String::from("test"), String::from("TestRule"));
         assert_eq!(res, "HelloWorld");
 
-        let res = rules.build_rule(String::from("test"), String::from("TestRule2"));
+        let res = rules.build_rule_slow(String::from("test"), String::from("TestRule2"));
         assert_eq!(res, "HelloWorldWorld");
     }
 }
