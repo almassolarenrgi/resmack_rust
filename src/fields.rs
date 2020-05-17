@@ -26,15 +26,14 @@ impl And {
 }
 
 impl Buildable for And {
-    fn build(&self, cb: &dyn RuleBuilder) -> String {
+    fn build(&self, output: &mut String, cb: &dyn RuleBuilder) {
         let mut res = String::new();
         for (idx, item) in self.items.iter().enumerate() {
             if idx > 0 {
-                res += &self.sep;
+                output.push_str(&self.sep);
             }
-            res += &item.build(cb);
+            item.build(output, cb);
         }
-        res
     }
 
     fn finalize(&mut self, info_fetcher: &dyn InfoFetcher) {
@@ -74,13 +73,13 @@ impl Or {
 }
 
 impl Buildable for Or {
-    fn build(&self, cb: &dyn RuleBuilder) -> String {
+    fn build(&self, output: &mut String, cb: &dyn RuleBuilder) {
         if self.items.len() == 0 {
-            return String::from("");
+            return;
         }
         let rand_idx = random::Rand::rand_int(0, self.items.len());
         let chosen_item = &self.items[rand_idx];
-        chosen_item.build(cb)
+        chosen_item.build(output, cb);
     }
 
     fn finalize(&mut self, info_fetcher: &dyn InfoFetcher) {
@@ -118,11 +117,14 @@ impl Ref {
 }
 
 impl Buildable for Ref {
-    fn build(&self, cb: &dyn RuleBuilder) -> String {
+    fn build(&self, output: &mut String, cb: &dyn RuleBuilder) {
         let ref_info = self
             .ref_info
             .expect("ref_info was None. Was the ruleset not finalized?");
-        cb.build_rule(ref_info)
+        cb.get_rule(ref_info)
+            .expect("Rule does not exist")
+            .value
+            .build(output, cb);
     }
 
     fn finalize(&mut self, info_fetcher: &dyn InfoFetcher) {
@@ -156,6 +158,9 @@ mod tests {
         fn build_rule_slow<'a>(&'a mut self, _: String, _: String) -> String {
             panic!("Rule building not supported");
         }
+        fn get_rule<'a>(&'a self, rule_info: RuleInfo) -> Option<&rules::Rule> {
+            panic!("Rule building not supported");
+        }
         fn build_rule<'a>(&'a self, _: RuleInfo) -> String {
             panic!("Rule building not supported");
         }
@@ -170,26 +175,29 @@ mod tests {
     fn and_macro() {
         let faker = FakeBuilder {};
         let and_test = and!("Hello", "World");
-        assert_eq!(and_test.build(faker.as_rule_builder()), "HelloWorld");
+        assert_eq!(and_test.build_direct(faker.as_rule_builder()), "HelloWorld");
     }
 
     #[test]
     fn and_macro_with_sep() {
         let faker = FakeBuilder {};
         let and_test = and!(sep = "*", "Hello", "World");
-        assert_eq!(and_test.build(faker.as_rule_builder()), "Hello*World");
+        assert_eq!(
+            and_test.build_direct(faker.as_rule_builder()),
+            "Hello*World"
+        );
     }
 
     #[test]
     fn or_macro() {
         let faker = FakeBuilder {};
         let or_test = or!("Hello", "World");
-        let built = or_test.build(faker.as_rule_builder());
+        let built = or_test.build_direct(faker.as_rule_builder());
 
         let matches = or_test
             .items
             .iter()
-            .filter(|item| item.build(faker.as_rule_builder()) == built)
+            .filter(|item| item.build_direct(faker.as_rule_builder()) == built)
             .count();
         assert_eq!(matches, 1);
     }

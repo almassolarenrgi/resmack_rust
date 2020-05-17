@@ -96,19 +96,21 @@ impl RuleSet {
         let info_fetcher: RuleInfoFetcher = RuleInfoFetcher::new(&self.cat_names, &self.rule_names);
         info_fetcher.get_rule_info(cat_name, rule_name)
     }
+}
 
-    pub fn get_rule<'a>(&'a self, info: RuleInfo) -> Option<&'a Rule> {
+impl RuleBuilder for RuleSet {
+    fn get_rule(&self, info: RuleInfo) -> Option<&Rule> {
         let cat_list = self.categories.get(info.cat_idx)?;
         let rule_list = cat_list.get(info.rule_idx)?;
         let rand_idx = Rand::rand_int(0, rule_list.len());
         Some(&rule_list[rand_idx])
     }
-}
 
-impl RuleBuilder for RuleSet {
     fn build_rule<'a>(&self, rule_info: RuleInfo) -> String {
         let rule = self.get_rule(rule_info).expect("Rule not found");
-        rule.value.build(self.as_rule_builder())
+        let mut res = String::new();
+        rule.value.build(&mut res, self.as_rule_builder());
+        res
     }
 
     fn build_rule_slow<'a>(&mut self, cat: String, rule_name: String) -> String {
@@ -177,6 +179,9 @@ mod tests {
     struct FakeBuilder {}
     impl RuleBuilder for FakeBuilder {
         fn build_rule_slow<'a>(&'a mut self, cat: String, rule_name: String) -> String {
+            panic!("Rule building not supported");
+        }
+        fn get_rule<'a>(&'a self, rule_info: RuleInfo) -> Option<&Rule> {
             panic!("Rule building not supported");
         }
         fn build_rule<'a>(&'a self, rule_info: RuleInfo) -> String {
