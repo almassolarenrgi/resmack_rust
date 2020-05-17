@@ -1,5 +1,6 @@
 stages:
   - test
+  - bench
 
 image: rust:latest
 
@@ -7,3 +8,8 @@ test:
   stage: test
   script:
     - cargo test
+
+bench_run:
+  stage: bench
+  script:
+    - cargo run --release
