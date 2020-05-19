@@ -1,201 +1,229 @@
-#![macro_use]
-use super::random;
-use super::types::*;
+use crate::rules::{RefFetcher, RefInfo};
 
-pub struct And {
-    pub items: BuildableVec,
-    pub sep: String,
+const SAFE_BUILD: bool = true;
+
+/// Holds the final values that are used to build resulting data
+pub enum Item<'a> {
+    Direct(Vec<u8>),
+    And(&'a And<'a>),
+    Or(&'a Or<'a>),
+    Ref(&'a Ref<'a>),
 }
 
-// ----------------------------------------------------------------------------
+/// Used to convert the initial types used in the grammar from their source
+/// types to one of the Item:: types.
+trait Convertible {
+    fn convert(&self) -> Item;
+}
 
-impl And {
-    pub fn new(sep: &str) -> And {
+/// Converts `&str` to an Item::Direct instance
+impl Convertible for &str {
+    fn convert(&self) -> Item {
+        Item::Direct(self.as_bytes().to_vec())
+    }
+}
+
+/// Converts `usize` (default for numbers) to an Item::Direct instance
+impl Convertible for usize {
+    fn convert(&self) -> Item {
+        Item::Direct(self.to_string().as_bytes().to_vec())
+    }
+}
+
+/// Converts `f64` (default for floats) to an Item::Direct instance
+impl Convertible for f64 {
+    fn convert(&self) -> Item {
+        Item::Direct(self.to_string().as_bytes().to_vec())
+    }
+}
+
+struct ItemBuilder<'a> {
+    ref_fetcher: &'a RefFetcher<'a>,
+}
+impl<'a> ItemBuilder<'a> {
+    fn build(&'a self, item: &'a Item<'a>, output: &mut Vec<u8>) {
+        println!("Building an item");
+        match item {
+            Item::Direct(v) => {
+                println!(
+                    "Building direct item: {}",
+                    std::str::from_utf8(&v[..]).unwrap()
+                );
+                if SAFE_BUILD {
+                    Self::safe_build(v, output);
+                } else {
+                    Self::unsafe_build(v, output);
+                }
+            }
+            Item::And(v) => v.build(self, output),
+            Item::Or(v) => v.build(self, output),
+            Item::Ref(v) => v.build(self, self.ref_fetcher, output),
+        }
+    }
+
+    fn safe_build(item: &Vec<u8>, output: &mut Vec<u8>) {
+        output.extend_from_slice(item);
+    }
+    fn unsafe_build(item: &Vec<u8>, output: &mut Vec<u8>) {
+        unsafe {
+            let old_size = output.len();
+            let new_size = old_size + item.len();
+
+            if new_size > output.capacity() {
+                {
+                    output.reserve(new_size - old_size);
+                }
+            }
+
+            std::ptr::copy_nonoverlapping(
+                item.as_ptr(),
+                output.as_mut_ptr().offset(old_size as isize),
+                item.len(),
+            );
+            output.set_len(new_size);
+        }
+    }
+}
+
+struct And<'a> {
+    sep: Item<'a>,
+    items: Vec<Item<'a>>,
+    use_sep: bool,
+}
+
+/// Converts `And` to an Item::And instance
+impl<'a> Convertible for And<'a> {
+    fn convert(&self) -> Item {
+        Item::And(self)
+    }
+}
+
+impl<'a> And<'a> {
+    fn new(sep: &'a dyn Convertible, items: &Vec<&'a dyn Convertible>) -> And<'a> {
+        let use_sep = match sep.convert() {
+            Item::Direct(v) => v.len() > 0,
+            _ => true,
+        };
         And {
-            items: vec![],
-            sep: sep.to_string(),
+            sep: sep.convert(),
+            use_sep: use_sep,
+            items: items.iter().map(|x| x.convert()).collect(),
         }
     }
 
-    pub fn item(mut self, item: impl Buildable + 'static) -> Self {
-        self.items.push(Box::new(item));
-        self
-    }
-}
-
-impl Buildable for And {
-    fn build(&self, output: &mut String, cb: &dyn RuleBuilder) {
-        for (idx, item) in self.items.iter().enumerate() {
-            if idx > 0 {
-                output.push_str(&self.sep);
+    fn build(&'a self, builder: &'a ItemBuilder, output: &mut Vec<u8>) {
+        let mut idx = 0;
+        for item in self.items.iter() {
+            if self.use_sep && idx > 0 {
+                builder.build(&self.sep, output);
             }
-            item.build(output, cb);
-        }
-    }
-
-    fn finalize(&mut self, info_fetcher: &dyn InfoFetcher) {
-        for item in self.items.iter_mut() {
-            item.finalize(info_fetcher);
+            builder.build(item, output);
+            idx += 1;
         }
     }
 }
 
-#[macro_export]
 macro_rules! and {
-    // all arguments specified, sep first
-    ( sep=$sep:expr, $( $field:expr ),*) => {
-        crate::fields::And::new($sep)
-            $(.item($field))*
+    (sep = $sep:expr, $($item:expr),*) => {
+        And::new(&$sep, &vec![$(&$item),*])
     };
-    ( $( $field:expr ),*) => {
-        and!(sep="", $($field), *)
+    ($($item:expr),*) => {
+        and!(sep="", $($item),*)
     };
 }
 
-// ----------------------------------------------------------------------------
-
-pub struct Or {
-    pub items: BuildableVec,
+struct Or<'a> {
+    choices: Vec<&'a Item<'a>>,
 }
 
-impl Or {
-    pub fn new() -> Or {
-        Or { items: vec![] }
-    }
-
-    pub fn item(mut self, item: impl Buildable + 'static) -> Self {
-        self.items.push(Box::new(item));
-        self
+/// Converts `Or` to an Item::Or instance
+impl<'a> Convertible for Or<'a> {
+    fn convert(&self) -> Item {
+        Item::Or(self)
     }
 }
 
-impl Buildable for Or {
-    fn build(&self, output: &mut String, cb: &dyn RuleBuilder) {
-        if self.items.len() == 0 {
-            return;
+impl<'a> Or<'a> {
+    fn build(&'a self, builder: &'a ItemBuilder, output: &mut Vec<u8>) {
+        let choice_idx = 0;
+        builder.build(
+            self.choices.get(choice_idx).expect("Shouldn't fail"),
+            output,
+        );
+    }
+}
+
+struct Ref<'a> {
+    ref_cat: &'a str,
+    ref_rule: &'a str,
+    ref_info: Option<RefInfo>,
+}
+
+/// Converts `Ref` to an Item::Ref instance
+impl<'a> Convertible for Ref<'a> {
+    fn convert(&self) -> Item {
+        Item::Ref(self)
+    }
+}
+
+impl<'a> Ref<'a> {
+    fn build(
+        &'a self,
+        builder: &'a ItemBuilder,
+        ref_fetcher: &'a RefFetcher,
+        output: &mut Vec<u8>,
+    ) {
+        unimplemented!()
+        /*
+        if let None = self.ref_info {
+            self.ref_info = ref_fetcher.get_ref_info(&self.ref_cat, &self.ref_rule);
         }
-        let rand_idx = random::Rand::rand_int(0, self.items.len());
-        let chosen_item = &self.items[rand_idx];
-        chosen_item.build(output, cb);
-    }
-
-    fn finalize(&mut self, info_fetcher: &dyn InfoFetcher) {
-        for item in self.items.iter_mut() {
-            item.finalize(info_fetcher);
-        }
+        let rule_val = ref_fetcher.fetch_rule(self.ref_info.expect("Could not lookup rule"));
+        builder.build(rule_val, output);
+        */
     }
 }
-
-#[macro_export]
-macro_rules! or {
-    // all arguments specified, sep first
-    ( $( $field:expr ),*) => {
-        crate::fields::Or::new()
-            $(.item($field))*
-    };
-}
-
-// ----------------------------------------------------------------------------
-
-pub struct Ref {
-    ref_name: String,
-    ref_cat: String,
-    ref_info: Option<RuleInfo>,
-}
-
-impl Ref {
-    pub fn new(ref_cat: String, ref_name: String) -> Ref {
-        Ref {
-            ref_name: ref_name,
-            ref_cat: ref_cat,
-            ref_info: None,
-        }
-    }
-}
-
-impl Buildable for Ref {
-    fn build(&self, output: &mut String, cb: &dyn RuleBuilder) {
-        let ref_info = self
-            .ref_info
-            .expect("ref_info was None. Was the ruleset not finalized?");
-        cb.get_rule(ref_info)
-            .expect("Rule does not exist")
-            .value
-            .build(output, cb);
-    }
-
-    fn finalize(&mut self, info_fetcher: &dyn InfoFetcher) {
-        match self.ref_info {
-            Some(_) => return,
-            None => {
-                self.ref_info =
-                    info_fetcher.get_rule_info(self.ref_cat.clone(), self.ref_name.clone());
-            }
-        }
-    }
-}
-
-#[macro_export]
-macro_rules! reff {
-    // all arguments specified, sep first
-    ( $cat:expr, $ref_name:expr ) => {
-        crate::fields::Ref::new($cat.to_string(), $ref_name.to_string())
-    };
-}
-
-// ----------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules;
+    use std::collections::BTreeMap;
+    use std::str;
 
-    struct FakeBuilder {}
-    impl RuleBuilder for FakeBuilder {
-        fn build_rule_slow<'a>(&'a mut self, _: String, _: String) -> String {
-            panic!("Rule building not supported");
-        }
-        fn get_rule<'a>(&'a self, _: RuleInfo) -> Option<&rules::Rule> {
-            panic!("Rule building not supported");
-        }
-        fn build_rule<'a>(&'a self, _: RuleInfo) -> String {
-            panic!("Rule building not supported");
-        }
-    }
-    impl FakeBuilder {
-        fn as_rule_builder(&self) -> &dyn RuleBuilder {
-            self
-        }
+    macro_rules! build {
+        ($item:expr) => {{
+            let ref_fetcher: RefFetcher = RefFetcher {
+                cat_map: &BTreeMap::new(),
+                rule_map: &BTreeMap::new(),
+            };
+            let item_builder: ItemBuilder = ItemBuilder {
+                ref_fetcher: &ref_fetcher,
+            };
+            let mut tmp_vec: Vec<u8> = Vec::new();
+            $item.build(&item_builder, &mut tmp_vec);
+            str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
+        }};
     }
 
     #[test]
-    fn and_macro() {
-        let faker = FakeBuilder {};
-        let and_test = and!("Hello", "World");
-        assert_eq!(and_test.build_direct(faker.as_rule_builder()), "HelloWorld");
+    fn and_test() {
+        let and = and!("hello", "there");
+        let res = build!(and);
+        assert_eq!(res, "hellothere");
     }
 
     #[test]
-    fn and_macro_with_sep() {
-        let faker = FakeBuilder {};
-        let and_test = and!(sep = "*", "Hello", "World");
-        assert_eq!(
-            and_test.build_direct(faker.as_rule_builder()),
-            "Hello*World"
-        );
+    fn and_test_sep() {
+        let and = and!(sep = "|", "hello", "there");
+        let res = build!(and);
+        assert_eq!(res, "hello|there");
     }
 
     #[test]
-    fn or_macro() {
-        let faker = FakeBuilder {};
-        let or_test = or!("Hello", "World");
-        let built = or_test.build_direct(faker.as_rule_builder());
-
-        let matches = or_test
-            .items
-            .iter()
-            .filter(|item| item.build_direct(faker.as_rule_builder()) == built)
-            .count();
-        assert_eq!(matches, 1);
+    fn nested_and() {
+        let and_inner = and!(sep = "|", "hello", "there");
+        let and_outer = and!(sep = "-", "hello", and_inner, "there");
+        let res = build!(and_outer);
+        assert_eq!(res, "hello-hello|there-there");
     }
 }
