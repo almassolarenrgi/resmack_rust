@@ -1,34 +1,68 @@
-use crate::fields::Item;
+#![macro_use]
+
 use std::collections::BTreeMap;
+
+use crate::fields::{Convertible, Item};
 
 pub struct RuleSet<'a> {
     cat_map: BTreeMap<&'a str, usize>,
     rule_map: BTreeMap<&'a str, usize>,
-    rules: Vec<Vec<Vec<&'a Item<'a>>>>,
+    pub categories: Vec<Vec<Vec<Item<'a>>>>,
+    curr_cat: &'a str,
 }
 
 impl<'a> RuleSet<'a> {
-    fn add_rule(&'a mut self, cat_name: &'a str, rule_name: &'a str, value: &'a Item<'a>) {
-        let cat_idx = match self.cat_map.get(cat_name) {
+    pub fn new() -> RuleSet<'a> {
+        RuleSet {
+            cat_map: BTreeMap::new(),
+            rule_map: BTreeMap::new(),
+            categories: Vec::new(),
+            curr_cat: "",
+        }
+    }
+
+    pub fn set_category(mut self, cat: &'a str) -> Self {
+        self.curr_cat = cat;
+        self
+    }
+
+    pub fn add_rule(mut self, rule: &Rule<'a>) -> Self {
+        let cat_idx = match self.cat_map.get(self.curr_cat) {
             None => {
-                let res = self.rules.len();
-                self.cat_map.insert(cat_name, res);
-                self.rules.push(Vec::new());
+                let res = self.categories.len();
+                self.cat_map.insert(self.curr_cat, res);
+                self.categories.push(Vec::new());
                 res
             }
             Some(v) => *v,
         };
-        let mut cat = self.rules.get_mut(cat_idx).unwrap();
-        let rule_idx = match self.rule_map.get(rule_name) {
+        let mut cat = self.categories.get_mut(cat_idx).unwrap();
+        let rule_idx = match self.rule_map.get(rule.rule_name) {
             None => {
                 let res = cat.len();
-                self.rule_map.insert(rule_name, res);
+                self.rule_map.insert(rule.rule_name, res);
+                cat.push(Vec::new());
                 res
             }
             Some(v) => *v,
         };
-        cat[rule_idx].push(value);
+        cat[rule_idx].push(rule.rule_value.convert());
+        self
     }
+}
+
+pub struct Rule<'a> {
+    rule_name: &'a str,
+    rule_value: &'a dyn Convertible,
+}
+
+macro_rules! rule {
+    ($rule_name:expr, $rule_val:expr) => {
+        &Rule {
+            rule_name: $rule_name,
+            rule_value: &$rule_val,
+        }
+    };
 }
 
 pub struct RefFetcher<'a> {
@@ -51,4 +85,20 @@ impl<'a> RefFetcher<'a> {
 pub struct RefInfo {
     cat_idx: usize,
     rule_idx: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fields;
+
+    #[test]
+    fn test_rule_set() {
+        let rules = RuleSet::new()
+            .set_category("test")
+            .add_rule(rule!("rule", and!(sep = "", "hello", "there")));
+
+        assert_eq!(rules.categories.len(), 1);
+        assert_eq!(rules.categories[0].len(), 1);
+    }
 }

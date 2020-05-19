@@ -1,4 +1,6 @@
-use crate::rules::{RefFetcher, RefInfo};
+#![macro_use]
+
+use super::rules::{RefFetcher, RefInfo};
 
 const SAFE_BUILD: bool = true;
 
@@ -12,9 +14,18 @@ pub enum Item<'a> {
 
 /// Used to convert the initial types used in the grammar from their source
 /// types to one of the Item:: types.
-trait Convertible {
+pub trait Convertible {
     fn convert(&self) -> Item;
 }
+
+/*
+/// Converts `&str` to an Item::Direct instance
+impl Convertible for &str {
+    fn convert(&self) -> Item {
+        Item::Direct(self.as_bytes().to_vec())
+    }
+}
+*/
 
 /// Converts `&str` to an Item::Direct instance
 impl Convertible for &str {
@@ -37,11 +48,11 @@ impl Convertible for f64 {
     }
 }
 
-struct ItemBuilder<'a> {
+pub struct ItemBuilder<'a> {
     ref_fetcher: &'a RefFetcher<'a>,
 }
 impl<'a> ItemBuilder<'a> {
-    fn build(&'a self, item: &'a Item<'a>, output: &mut Vec<u8>) {
+    pub fn build(&'a self, item: &'a Item<'a>, output: &mut Vec<u8>) {
         println!("Building an item");
         match item {
             Item::Direct(v) => {
@@ -85,7 +96,7 @@ impl<'a> ItemBuilder<'a> {
     }
 }
 
-struct And<'a> {
+pub struct And<'a> {
     sep: Item<'a>,
     items: Vec<Item<'a>>,
     use_sep: bool,
@@ -99,7 +110,7 @@ impl<'a> Convertible for And<'a> {
 }
 
 impl<'a> And<'a> {
-    fn new(sep: &'a dyn Convertible, items: &Vec<&'a dyn Convertible>) -> And<'a> {
+    pub fn new(sep: &'a dyn Convertible) -> And<'a> {
         let use_sep = match sep.convert() {
             Item::Direct(v) => v.len() > 0,
             _ => true,
@@ -107,11 +118,16 @@ impl<'a> And<'a> {
         And {
             sep: sep.convert(),
             use_sep: use_sep,
-            items: items.iter().map(|x| x.convert()).collect(),
+            items: Vec::new(),
         }
     }
 
-    fn build(&'a self, builder: &'a ItemBuilder, output: &mut Vec<u8>) {
+    pub fn add_item(mut self, item: &'a dyn Convertible) -> Self {
+        self.items.push(item.convert());
+        self
+    }
+
+    pub fn build(&'a self, builder: &'a ItemBuilder, output: &mut Vec<u8>) {
         let mut idx = 0;
         for item in self.items.iter() {
             if self.use_sep && idx > 0 {
@@ -123,17 +139,16 @@ impl<'a> And<'a> {
     }
 }
 
+#[macro_export]
 macro_rules! and {
     (sep = $sep:expr, $($item:expr),*) => {
-        And::new(&$sep, &vec![$(&$item),*])
-    };
-    ($($item:expr),*) => {
-        and!(sep="", $($item),*)
+        crate::fields::And::new($sep)
+            $(.add_item($item))*
     };
 }
 
-struct Or<'a> {
-    choices: Vec<&'a Item<'a>>,
+pub struct Or<'a> {
+    pub choices: Vec<&'a Item<'a>>,
 }
 
 /// Converts `Or` to an Item::Or instance
@@ -144,7 +159,7 @@ impl<'a> Convertible for Or<'a> {
 }
 
 impl<'a> Or<'a> {
-    fn build(&'a self, builder: &'a ItemBuilder, output: &mut Vec<u8>) {
+    pub fn build(&'a self, builder: &'a ItemBuilder, output: &mut Vec<u8>) {
         let choice_idx = 0;
         builder.build(
             self.choices.get(choice_idx).expect("Shouldn't fail"),
@@ -153,10 +168,10 @@ impl<'a> Or<'a> {
     }
 }
 
-struct Ref<'a> {
-    ref_cat: &'a str,
-    ref_rule: &'a str,
-    ref_info: Option<RefInfo>,
+pub struct Ref<'a> {
+    pub ref_cat: &'a str,
+    pub ref_rule: &'a str,
+    pub ref_info: Option<RefInfo>,
 }
 
 /// Converts `Ref` to an Item::Ref instance
@@ -167,7 +182,7 @@ impl<'a> Convertible for Ref<'a> {
 }
 
 impl<'a> Ref<'a> {
-    fn build(
+    pub fn build(
         &'a self,
         builder: &'a ItemBuilder,
         ref_fetcher: &'a RefFetcher,
@@ -207,7 +222,7 @@ mod tests {
 
     #[test]
     fn and_test() {
-        let and = and!("hello", "there");
+        let and = and!(sep = "", "hello", "there");
         let res = build!(and);
         assert_eq!(res, "hellothere");
     }
