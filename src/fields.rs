@@ -5,45 +5,52 @@ use super::rules::{RefFetcher, RefInfo};
 const SAFE_BUILD: bool = true;
 
 /// Holds the final values that are used to build resulting data
-pub enum Item<'a> {
+pub enum Item {
     Direct(Vec<u8>),
-    And(&'a And<'a>),
-    Or(&'a Or<'a>),
-    Ref(&'a Ref<'a>),
+    And(And),
+    /*
+    Or(Or),
+    Ref(Ref),
+    */
 }
 
 /// Used to convert the initial types used in the grammar from their source
 /// types to one of the Item:: types.
-pub trait Convertible {
-    fn convert(&self) -> Item;
+pub trait Convertible: Sized {
+    fn convert(self) -> Item;
 }
 
-/*
-/// Converts `&str` to an Item::Direct instance
-impl Convertible for &str {
-    fn convert(&self) -> Item {
+/// Converts `String` to an Item::Direct instance
+impl<'a> Convertible for String {
+    fn convert(self) -> Item {
         Item::Direct(self.as_bytes().to_vec())
     }
 }
-*/
 
-/// Converts `&str` to an Item::Direct instance
-impl Convertible for &str {
-    fn convert(&self) -> Item {
+/// Converts `String` to an Item::Direct instance
+impl<'a> Convertible for &str {
+    fn convert(self) -> Item {
         Item::Direct(self.as_bytes().to_vec())
     }
 }
 
 /// Converts `usize` (default for numbers) to an Item::Direct instance
-impl Convertible for usize {
-    fn convert(&self) -> Item {
+impl<'a> Convertible for usize {
+    fn convert(self) -> Item {
+        Item::Direct(self.to_string().as_bytes().to_vec())
+    }
+}
+
+/// Converts `usize` (default for numbers) to an Item::Direct instance
+impl<'a> Convertible for i32 {
+    fn convert(self) -> Item {
         Item::Direct(self.to_string().as_bytes().to_vec())
     }
 }
 
 /// Converts `f64` (default for floats) to an Item::Direct instance
-impl Convertible for f64 {
-    fn convert(&self) -> Item {
+impl<'a> Convertible for f64 {
+    fn convert(self) -> Item {
         Item::Direct(self.to_string().as_bytes().to_vec())
     }
 }
@@ -52,23 +59,23 @@ pub struct ItemBuilder<'a> {
     ref_fetcher: &'a RefFetcher<'a>,
 }
 impl<'a> ItemBuilder<'a> {
-    pub fn build(&'a self, item: &'a Item<'a>, output: &mut Vec<u8>) {
+    pub fn build(&'a self, item: &'a Item, output: &mut Vec<u8>) {
         println!("Building an item");
         match item {
-            Item::Direct(v) => {
-                println!(
-                    "Building direct item: {}",
-                    std::str::from_utf8(&v[..]).unwrap()
-                );
-                if SAFE_BUILD {
-                    Self::safe_build(v, output);
-                } else {
-                    Self::unsafe_build(v, output);
-                }
-            }
+            Item::Direct(v) => self.direct_build(v, output),
             Item::And(v) => v.build(self, output),
+            /*
             Item::Or(v) => v.build(self, output),
             Item::Ref(v) => v.build(self, self.ref_fetcher, output),
+            */
+        }
+    }
+
+    pub fn direct_build(&'a self, v: &Vec<u8>, output: &mut Vec<u8>) {
+        if SAFE_BUILD {
+            Self::safe_build(v, output);
+        } else {
+            Self::unsafe_build(v, output);
         }
     }
 
@@ -96,42 +103,39 @@ impl<'a> ItemBuilder<'a> {
     }
 }
 
-pub struct And<'a> {
-    sep: Item<'a>,
-    items: Vec<Item<'a>>,
-    use_sep: bool,
+pub struct And {
+    sep: Vec<u8>,
+    items: Vec<Item>,
 }
 
 /// Converts `And` to an Item::And instance
-impl<'a> Convertible for And<'a> {
-    fn convert(&self) -> Item {
+impl<'a> Convertible for And {
+    fn convert(self) -> Item {
         Item::And(self)
     }
 }
 
-impl<'a> And<'a> {
-    pub fn new(sep: &'a dyn Convertible) -> And<'a> {
-        let use_sep = match sep.convert() {
-            Item::Direct(v) => v.len() > 0,
-            _ => true,
-        };
+impl And {
+    pub fn new<T: Convertible>(sep: T) -> And {
         And {
-            sep: sep.convert(),
-            use_sep: use_sep,
+            sep: match sep.convert() {
+                Item::Direct(v) => v,
+                _ => panic!("Separator may only be an Item::Direct"),
+            },
             items: Vec::new(),
         }
     }
 
-    pub fn add_item(mut self, item: &'a dyn Convertible) -> Self {
+    pub fn add_item<T: Convertible>(mut self, item: T) -> Self {
         self.items.push(item.convert());
         self
     }
 
-    pub fn build(&'a self, builder: &'a ItemBuilder, output: &mut Vec<u8>) {
+    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>) {
         let mut idx = 0;
         for item in self.items.iter() {
-            if self.use_sep && idx > 0 {
-                builder.build(&self.sep, output);
+            if self.sep.len() > 0 && idx > 0 {
+                builder.direct_build(&self.sep, output);
             }
             builder.build(item, output);
             idx += 1;
@@ -147,19 +151,20 @@ macro_rules! and {
     };
 }
 
-pub struct Or<'a> {
-    pub choices: Vec<&'a Item<'a>>,
+/*
+pub struct Or {
+    pub choices: Vec<Item>,
 }
 
 /// Converts `Or` to an Item::Or instance
-impl<'a> Convertible for Or<'a> {
+impl Convertible for Or {
     fn convert(&self) -> Item {
         Item::Or(self)
     }
 }
 
-impl<'a> Or<'a> {
-    pub fn build(&'a self, builder: &'a ItemBuilder, output: &mut Vec<u8>) {
+impl Or {
+    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>) {
         let choice_idx = 0;
         builder.build(
             self.choices.get(choice_idx).expect("Shouldn't fail"),
@@ -168,26 +173,21 @@ impl<'a> Or<'a> {
     }
 }
 
-pub struct Ref<'a> {
-    pub ref_cat: &'a str,
-    pub ref_rule: &'a str,
+pub struct Ref {
+    pub ref_cat: &'static str,
+    pub ref_rule: &'static str,
     pub ref_info: Option<RefInfo>,
 }
 
 /// Converts `Ref` to an Item::Ref instance
-impl<'a> Convertible for Ref<'a> {
+impl Convertible for Ref {
     fn convert(&self) -> Item {
         Item::Ref(self)
     }
 }
 
-impl<'a> Ref<'a> {
-    pub fn build(
-        &'a self,
-        builder: &'a ItemBuilder,
-        ref_fetcher: &'a RefFetcher,
-        output: &mut Vec<u8>,
-    ) {
+impl Ref {
+    pub fn build(&self, builder: &ItemBuilder, ref_fetcher: &RefFetcher, output: &mut Vec<u8>) {
         unimplemented!()
         /*
         if let None = self.ref_info {
@@ -198,12 +198,49 @@ impl<'a> Ref<'a> {
         */
     }
 }
+*/
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::str;
+
+    #[test]
+    fn convert_string() {
+        let item: Item = String::from("hello").convert();
+        match item {
+            Item::Direct(_) => (),
+            _ => assert_eq!(false, true),
+        };
+    }
+
+    #[test]
+    fn convert_usize() {
+        let item: Item = 12.convert();
+        match item {
+            Item::Direct(_) => (),
+            _ => assert_eq!(false, true),
+        };
+    }
+
+    #[test]
+    fn convert_i32() {
+        let item: Item = (-12).convert();
+        match item {
+            Item::Direct(_) => (),
+            _ => assert_eq!(false, true),
+        };
+    }
+
+    #[test]
+    fn convert_f64() {
+        let item: Item = 100.05.convert();
+        match item {
+            Item::Direct(_) => (),
+            _ => assert_eq!(false, true),
+        };
+    }
 
     macro_rules! build {
         ($item:expr) => {{
@@ -221,7 +258,14 @@ mod tests {
     }
 
     #[test]
-    fn and_test() {
+    fn and_full() {
+        let mut and = And::new("|").add_item("Test").add_item("yoyoy");
+        let res = build!(and);
+        assert_eq!(res, "Test|yoyoy");
+    }
+
+    #[test]
+    fn and_macro() {
         let and = and!(sep = "", "hello", "there");
         let res = build!(and);
         assert_eq!(res, "hellothere");
