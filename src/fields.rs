@@ -10,8 +10,8 @@ pub enum Item {
     And(And),
     /*
     Or(Or),
-    Ref(Ref),
     */
+    Ref(Ref),
 }
 
 /// Used to convert the initial types used in the grammar from their source
@@ -56,17 +56,25 @@ impl<'a> Convertible for f64 {
 }
 
 pub struct ItemBuilder<'a> {
-    ref_fetcher: &'a RefFetcher<'a>,
+    pub ref_fetcher: RefFetcher<'a>,
 }
+
 impl<'a> ItemBuilder<'a> {
+    pub fn finalize(&self, item: &mut Item) {
+        match item {
+            Item::And(v) => v.finalize(self),
+            Item::Ref(v) => v.finalize(&self.ref_fetcher),
+            _ => (),
+        };
+    }
+
     pub fn build(&'a self, item: &'a Item, output: &mut Vec<u8>) {
-        println!("Building an item");
         match item {
             Item::Direct(v) => self.direct_build(v, output),
             Item::And(v) => v.build(self, output),
+            Item::Ref(v) => v.build(self, &self.ref_fetcher, output),
             /*
             Item::Or(v) => v.build(self, output),
-            Item::Ref(v) => v.build(self, self.ref_fetcher, output),
             */
         }
     }
@@ -109,7 +117,7 @@ pub struct And {
 }
 
 /// Converts `And` to an Item::And instance
-impl<'a> Convertible for And {
+impl Convertible for And {
     fn convert(self) -> Item {
         Item::And(self)
     }
@@ -131,6 +139,12 @@ impl And {
         self
     }
 
+    pub fn finalize(&mut self, builder: &ItemBuilder) {
+        for item in self.items.iter_mut() {
+            builder.finalize(item);
+        }
+    }
+
     pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>) {
         let mut idx = 0;
         for item in self.items.iter() {
@@ -147,6 +161,10 @@ impl And {
 macro_rules! and {
     (sep = $sep:expr, $($item:expr),*) => {
         crate::fields::And::new($sep)
+            $(.add_item($item))*
+    };
+    ($($item:expr),*) => {
+        crate::fields::And::new("")
             $(.add_item($item))*
     };
 }
@@ -172,6 +190,7 @@ impl Or {
         );
     }
 }
+*/
 
 pub struct Ref {
     pub ref_cat: &'static str,
@@ -181,30 +200,50 @@ pub struct Ref {
 
 /// Converts `Ref` to an Item::Ref instance
 impl Convertible for Ref {
-    fn convert(&self) -> Item {
+    fn convert(self) -> Item {
         Item::Ref(self)
     }
 }
 
 impl Ref {
-    pub fn build(&self, builder: &ItemBuilder, ref_fetcher: &RefFetcher, output: &mut Vec<u8>) {
-        unimplemented!()
-        /*
+    pub fn finalize(&mut self, ref_fetcher: &RefFetcher) {
         if let None = self.ref_info {
-            self.ref_info = ref_fetcher.get_ref_info(&self.ref_cat, &self.ref_rule);
+            self.ref_info = ref_fetcher.get_ref_info(self.ref_cat, self.ref_rule);
         }
-        let rule_val = ref_fetcher.fetch_rule(self.ref_info.expect("Could not lookup rule"));
-        builder.build(rule_val, output);
-        */
+    }
+    pub fn build(&self, builder: &ItemBuilder, ref_fetcher: &RefFetcher, output: &mut Vec<u8>) {
+        let (cat_idx, rule_idx) = match &self.ref_info {
+            None => panic!("Rule was never resolved! Was finalize not called?"),
+            Some(v) => (v.cat_idx, v.rule_idx),
+        };
+        let rule_val = ref_fetcher
+            .fetch_rule(cat_idx, rule_idx)
+            .expect("Concrete reference no longer valid");
+        builder.build(&rule_val, output);
     }
 }
-*/
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::str;
+
+    macro_rules! build {
+        ($item:expr) => {{
+            let ref_fetcher: RefFetcher = RefFetcher {
+                cat_map: &BTreeMap::new(),
+                rule_map: &BTreeMap::new(),
+                categories: &Vec::new(),
+            };
+            let item_builder: ItemBuilder = ItemBuilder {
+                ref_fetcher: ref_fetcher,
+            };
+            let mut tmp_vec: Vec<u8> = Vec::new();
+            $item.build(&item_builder, &mut tmp_vec);
+            str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
+        }};
+    }
 
     #[test]
     fn convert_string() {
@@ -240,21 +279,6 @@ mod tests {
             Item::Direct(_) => (),
             _ => assert_eq!(false, true),
         };
-    }
-
-    macro_rules! build {
-        ($item:expr) => {{
-            let ref_fetcher: RefFetcher = RefFetcher {
-                cat_map: &BTreeMap::new(),
-                rule_map: &BTreeMap::new(),
-            };
-            let item_builder: ItemBuilder = ItemBuilder {
-                ref_fetcher: &ref_fetcher,
-            };
-            let mut tmp_vec: Vec<u8> = Vec::new();
-            $item.build(&item_builder, &mut tmp_vec);
-            str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
-        }};
     }
 
     #[test]
