@@ -1,5 +1,6 @@
 #![macro_use]
 
+use super::random::Rand;
 use super::rules::{RefFetcher, RefInfo};
 
 const SAFE_BUILD: bool = true;
@@ -58,19 +59,20 @@ pub struct ItemBuilder<'a> {
 }
 
 impl<'a> ItemBuilder<'a> {
-    pub fn build(&'a self, item: &'a Item, output: &mut Vec<u8>) {
+    pub fn build(&'a self, item: &'a Item, output: &mut Vec<u8>, rand: &mut Rand) {
         match item {
             Item::Direct(v) => self.direct_build(v, output),
-            Item::And(v) => v.build(self, output),
-            Item::Ref(v) => v.build(self, output),
-            Item::Or(v) => v.build(self, output),
+            Item::And(v) => v.build(self, output, rand),
+            Item::Ref(v) => v.build(self, output, rand),
+            Item::Or(v) => v.build(self, output, rand),
         }
     }
 
-    pub fn fetch_rule(&'a self, cat_idx: usize, rule_idx: usize) -> Option<&Item> {
+    pub fn fetch_rule(&'a self, cat_idx: usize, rule_idx: usize, rand: &mut Rand) -> Option<&Item> {
         let cat = self.categories.get(cat_idx)?;
         let rules = cat.get(rule_idx)?;
-        let res = rules.get(0)?;
+        let rand_idx = rand.rand_int(0, rules.len());
+        let res = rules.get(rand_idx)?;
         Some(res)
     }
 
@@ -140,13 +142,13 @@ impl And {
         }
     }
 
-    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>) {
+    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
         let mut idx = 0;
         for item in self.items.iter() {
             if self.sep.len() > 0 && idx > 0 {
                 builder.direct_build(&self.sep, output);
             }
-            builder.build(item, output);
+            builder.build(item, output, rand);
             idx += 1;
         }
     }
@@ -182,12 +184,12 @@ impl Or {
         }
     }
 
-    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>) {
-        // TODO RANDOMNESS HERE
-        let choice_idx = 0;
+    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
+        let choice_idx = rand.rand_int(0, self.choices.len());
         builder.build(
             self.choices.get(choice_idx).expect("Shouldn't fail"),
             output,
+            rand,
         );
     }
 
@@ -240,15 +242,15 @@ impl Ref {
             self.ref_info = ref_fetcher.get_ref_info(&self.ref_cat, &self.ref_rule);
         }
     }
-    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>) {
+    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
         let (cat_idx, rule_idx) = match &self.ref_info {
             None => panic!("Rule was never resolved! Was finalize not called?"),
             Some(v) => (v.cat_idx, v.rule_idx),
         };
         let rule_val = builder
-            .fetch_rule(cat_idx, rule_idx)
+            .fetch_rule(cat_idx, rule_idx, rand)
             .expect("Concrete reference no longer valid");
-        builder.build(&rule_val, output);
+        builder.build(&rule_val, output, rand);
     }
 }
 
@@ -262,6 +264,7 @@ macro_rules! reff {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::random::Rand;
     use std::str;
 
     macro_rules! build {
@@ -269,8 +272,9 @@ mod tests {
             let item_builder: ItemBuilder = ItemBuilder {
                 categories: &Vec::new(),
             };
+            let mut rand = Rand::new(0);
             let mut tmp_vec: Vec<u8> = Vec::new();
-            $item.build(&item_builder, &mut tmp_vec);
+            $item.build(&item_builder, &mut tmp_vec, &mut rand);
             str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
         }};
     }

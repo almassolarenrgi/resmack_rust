@@ -1,6 +1,8 @@
 mod fields;
+mod random;
 mod rules;
 
+use crate::random::Rand;
 use crate::rules::*;
 
 use std::time;
@@ -12,6 +14,7 @@ macro_rules! _ref {
 }
 
 pub fn main() {
+    let mut rand = Rand::new(0);
     let mut rules = RuleSet::new();
     let rules = rules
         .set_category("test")
@@ -34,7 +37,7 @@ pub fn main() {
     let mut iters: usize = 0;
     let mut output: Vec<u8> = Vec::new();
     while (time::Instant::now() - start).as_millis() < (total_seconds * 1000) {
-        rules.build_rule(&ref_info, &mut output);
+        rules.build_rule(&ref_info, &mut output, &mut rand);
         iters += 1;
     }
     total_size += output.len();

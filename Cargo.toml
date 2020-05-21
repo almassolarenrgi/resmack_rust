@@ -8,6 +8,7 @@ edition = "2018"
 
 [dependencies]
 rand = ""
+rand_pcg = "*"
 twox-hash = "*"
 fnv = "*"
 num = "*"

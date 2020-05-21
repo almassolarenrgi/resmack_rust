@@ -2,11 +2,12 @@
 
 use std::collections::BTreeMap;
 
-use crate::fields::{Convertible, Item, ItemBuilder};
+use super::fields::{Convertible, Item, ItemBuilder};
+use super::random::Rand;
 
 pub struct RuleSet {
-    cat_map: BTreeMap<String, usize>,
-    rule_map: BTreeMap<String, usize>,
+    pub cat_map: BTreeMap<String, usize>,
+    pub rule_map: BTreeMap<String, usize>,
     pub categories: Vec<Vec<Vec<Item>>>,
     curr_cat: String,
 }
@@ -46,11 +47,12 @@ impl RuleSet {
             Some(v) => *v,
         };
         let cat = self.categories.get_mut(cat_idx).unwrap();
-        let rule_idx = match self.rule_map.get(&rule_name) {
+
+        let rule_key = format!("{}:{}", self.curr_cat, rule_name);
+        let rule_idx = match self.rule_map.get(&rule_key) {
             None => {
                 let res = cat.len();
-                self.rule_map
-                    .insert(format!("{}:{}", self.curr_cat, rule_name), res);
+                self.rule_map.insert(rule_key, res);
                 cat.push(Vec::new());
                 res
             }
@@ -88,7 +90,7 @@ impl RuleSet {
         Some(RefInfo { cat_idx, rule_idx })
     }
 
-    pub fn build_rule(&self, ref_info: &RefInfo, output: &mut Vec<u8>) {
+    pub fn build_rule(&self, ref_info: &RefInfo, output: &mut Vec<u8>, rand: &mut Rand) {
         let builder = ItemBuilder {
             categories: &self.categories,
         };
@@ -99,13 +101,12 @@ impl RuleSet {
             .expect("Invalid RefInfo")
             .get(ref_info.rule_idx)
             .expect("Invalid RefInfo");
-        // TODO random here
-        let rand_idx = 0;
+        let rand_idx = rand.rand_int(0, rule_list.len());
         let rule = rule_list.get(rand_idx).expect("Random index was incorrect");
-        builder.build(rule, output);
+        builder.build(rule, output, rand);
     }
 
-    pub fn get_rule<'a, T>(&'a self, cat_name: T, rule_name: T) -> Option<&'a Item>
+    pub fn get_rule<'a, T>(&'a self, cat_name: T, rule_name: T, rand: &mut Rand) -> Option<&'a Item>
     where
         T: Into<String>,
     {
@@ -113,18 +114,24 @@ impl RuleSet {
         let rule_name = rule_name.into();
 
         let ref_info = self.get_ref_info(cat_name, rule_name)?;
-        // TODO random idx here
-        let rand_idx = 0;
-        Some(
-            self.categories
-                .get(ref_info.cat_idx)?
-                .get(ref_info.rule_idx)?
-                .get(rand_idx)?,
-        )
+
+        let rule_list = self
+            .categories
+            .get(ref_info.cat_idx)?
+            .get(ref_info.rule_idx)?;
+
+        let rand_idx = rand.rand_int(0, rule_list.len());
+
+        Some(rule_list.get(rand_idx).expect("Random index was incorrect"))
     }
 
-    pub fn build_rule_slow<'a, T>(&'a self, cat_name: T, rule_name: T, output: &mut Vec<u8>)
-    where
+    pub fn build_rule_slow<'a, T>(
+        &'a self,
+        cat_name: T,
+        rule_name: T,
+        output: &mut Vec<u8>,
+        rand: &mut Rand,
+    ) where
         T: Into<String>,
     {
         let builder = ItemBuilder {
@@ -132,9 +139,9 @@ impl RuleSet {
         };
 
         let rule = self
-            .get_rule(cat_name, rule_name)
+            .get_rule(cat_name, rule_name, rand)
             .expect("Rule does not exist!");
-        builder.build(rule, output);
+        builder.build(rule, output, rand);
     }
 }
 
@@ -178,11 +185,13 @@ pub struct RefInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::random::Rand;
     use std::str;
 
     #[test]
     fn test_rule_set() {
         let mut rules = RuleSet::new();
+        let mut rand = Rand::new(0);
         let rules = rules
             .set_category("test")
             .add_rule("rule", and!(sep = "", "hello", "there"));
@@ -191,7 +200,7 @@ mod tests {
         assert_eq!(rules.categories.len(), 1);
         assert_eq!(rules.categories[0].len(), 1);
 
-        let rule = rules.get_rule("test", "rule");
+        let rule = rules.get_rule("test", "rule", &mut rand);
         assert_eq!(rule.is_some(), true);
     }
 
@@ -202,10 +211,11 @@ mod tests {
             .set_category("test")
             .add_rule("rule", and!("hello", "there"))
             .add_rule("rule2", and!("oogah", reff!("test", "rule"), "boogah"));
+        let mut rand = Rand::new(0);
         rules.finalize();
 
         let mut output: Vec<u8> = Vec::new();
-        rules.build_rule_slow("test", "rule2", &mut output);
+        rules.build_rule_slow("test", "rule2", &mut output, &mut rand);
         assert_eq!(
             str::from_utf8(&output[..]).unwrap(),
             "oogahhellothereboogah"
