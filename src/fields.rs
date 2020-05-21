@@ -262,15 +262,10 @@ macro_rules! reff {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use std::str;
 
     macro_rules! build {
         ($item:expr) => {{
-            let ref_fetcher: RefFetcher = RefFetcher {
-                cat_map: &BTreeMap::new(),
-                rule_map: &BTreeMap::new(),
-            };
             let item_builder: ItemBuilder = ItemBuilder {
                 categories: &Vec::new(),
             };
@@ -318,7 +313,7 @@ mod tests {
 
     #[test]
     fn and_full() {
-        let mut and = And::new("|").add_item("Test").add_item("yoyoy");
+        let and = And::new("|").add_item("Test").add_item("yoyoy");
         let res = build!(and);
         assert_eq!(res, "Test|yoyoy");
     }

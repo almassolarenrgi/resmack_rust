@@ -45,7 +45,7 @@ impl RuleSet {
             }
             Some(v) => *v,
         };
-        let mut cat = self.categories.get_mut(cat_idx).unwrap();
+        let cat = self.categories.get_mut(cat_idx).unwrap();
         let rule_idx = match self.rule_map.get(&rule_name) {
             None => {
                 let res = cat.len();
@@ -138,10 +138,6 @@ impl RuleSet {
     }
 }
 
-macro_rules! builder {
-    () => {};
-}
-
 pub struct RefFetcher<'a> {
     pub cat_map: &'a BTreeMap<String, usize>,
     pub rule_map: &'a BTreeMap<String, usize>,
@@ -182,7 +178,6 @@ pub struct RefInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fields;
     use std::str;
 
     #[test]

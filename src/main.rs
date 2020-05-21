@@ -1,7 +1,6 @@
 mod fields;
 mod rules;
 
-use crate::fields::*;
 use crate::rules::*;
 
 use std::time;
