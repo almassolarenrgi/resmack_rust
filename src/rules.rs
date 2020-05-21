@@ -49,7 +49,8 @@ impl RuleSet {
         let rule_idx = match self.rule_map.get(&rule_name) {
             None => {
                 let res = cat.len();
-                self.rule_map.insert(rule_name, res);
+                self.rule_map
+                    .insert(format!("{}:{}", self.curr_cat, rule_name), res);
                 cat.push(Vec::new());
                 res
             }
@@ -60,59 +61,102 @@ impl RuleSet {
     }
 
     pub fn finalize(&mut self) {
-        let ref_fetcher = RefFetcher {
+        let fetcher = RefFetcher {
             cat_map: &self.cat_map,
             rule_map: &self.rule_map,
-            categories: &self.categories,
         };
 
         for cat in self.categories.iter_mut() {
             for rule_list in cat.iter_mut() {
-                for rule_opt in rule_list.iter_mut() {}
+                for rule_opt in rule_list.iter_mut() {
+                    fetcher.finalize(rule_opt);
+                }
             }
         }
+    }
+
+    pub fn get_ref_info<T>(&self, cat_name: T, rule_name: T) -> Option<RefInfo>
+    where
+        T: Into<String>,
+    {
+        let cat_name = cat_name.into();
+        let rule_name = rule_name.into();
+
+        let cat_idx = *self.cat_map.get(&cat_name)?;
+        let rule_idx = *self.rule_map.get(&format!("{}:{}", cat_name, rule_name))?;
+
+        Some(RefInfo { cat_idx, rule_idx })
+    }
+
+    pub fn build_rule(&self, ref_info: &RefInfo, output: &mut Vec<u8>) {
+        let builder = ItemBuilder {
+            categories: &self.categories,
+        };
+
+        let rule_list = self
+            .categories
+            .get(ref_info.cat_idx)
+            .expect("Invalid RefInfo")
+            .get(ref_info.rule_idx)
+            .expect("Invalid RefInfo");
+        // TODO random here
+        let rand_idx = 0;
+        let rule = rule_list.get(rand_idx).expect("Random index was incorrect");
+        builder.build(rule, output);
     }
 
     pub fn get_rule<'a, T>(&'a self, cat_name: T, rule_name: T) -> Option<&'a Item>
     where
         T: Into<String>,
     {
-        let cat_idx = *self.cat_map.get(&cat_name.into())?;
-        let rule_idx = *self.rule_map.get(&rule_name.into())?;
+        let cat_name = cat_name.into();
+        let rule_name = rule_name.into();
+
+        let ref_info = self.get_ref_info(cat_name, rule_name)?;
         // TODO random idx here
         let rand_idx = 0;
-        Some(self.categories.get(cat_idx)?.get(rule_idx)?.get(rand_idx)?)
+        Some(
+            self.categories
+                .get(ref_info.cat_idx)?
+                .get(ref_info.rule_idx)?
+                .get(rand_idx)?,
+        )
     }
 
-    pub fn build_rule<'a, T>(&'a self, cat_name: T, rule_name: T, output: &mut Vec<u8>)
+    pub fn build_rule_slow<'a, T>(&'a self, cat_name: T, rule_name: T, output: &mut Vec<u8>)
     where
         T: Into<String>,
     {
-        let builder = self.new_builder();
+        let builder = ItemBuilder {
+            categories: &self.categories,
+        };
+
         let rule = self
             .get_rule(cat_name, rule_name)
             .expect("Rule does not exist!");
         builder.build(rule, output);
     }
+}
 
-    fn new_builder(&self) -> ItemBuilder {
-        ItemBuilder {
-            ref_fetcher: RefFetcher {
-                categories: &self.categories,
-                cat_map: &self.cat_map,
-                rule_map: &self.rule_map,
-            },
-        }
-    }
+macro_rules! builder {
+    () => {};
 }
 
 pub struct RefFetcher<'a> {
     pub cat_map: &'a BTreeMap<String, usize>,
     pub rule_map: &'a BTreeMap<String, usize>,
-    pub categories: &'a Vec<Vec<Vec<Item>>>,
 }
 
 impl<'a> RefFetcher<'a> {
+    pub fn finalize(&self, item: &mut Item) {
+        match item {
+            Item::And(v) => v.finalize(&self),
+            Item::Ref(v) => v.finalize(&self),
+            Item::Or(v) => v.finalize(&self),
+            _ => (),
+        };
+    }
+
     pub fn get_ref_info<T>(&'a self, cat_name: T, rule_name: T) -> Option<RefInfo>
     where
         T: Into<String>,
@@ -127,13 +171,6 @@ impl<'a> RefFetcher<'a> {
             cat_idx: cat_idx,
             rule_idx: rule_idx,
         })
-    }
-
-    pub fn fetch_rule(&'a self, cat_idx: usize, rule_idx: usize) -> Option<&Item> {
-        let cat = self.categories.get(cat_idx)?;
-        let rules = cat.get(rule_idx)?;
-        let res = rules.get(0)?;
-        Some(res)
     }
 }
 
@@ -169,9 +206,14 @@ mod tests {
         let rules = rules
             .set_category("test")
             .add_rule("rule", and!("hello", "there"))
-            .add_rule("rule2", and!("oogah", "boogah"));
+            .add_rule("rule2", and!("oogah", reff!("test", "rule"), "boogah"));
+        rules.finalize();
+
         let mut output: Vec<u8> = Vec::new();
-        rules.build_rule("test", "rule2", &mut output);
-        assert_eq!(str::from_utf8(&output[..]).unwrap(), "oogahboogah");
+        rules.build_rule_slow("test", "rule2", &mut output);
+        assert_eq!(
+            str::from_utf8(&output[..]).unwrap(),
+            "oogahhellothereboogah"
+        );
     }
 }

@@ -8,9 +8,7 @@ const SAFE_BUILD: bool = true;
 pub enum Item {
     Direct(Vec<u8>),
     And(And),
-    /*
     Or(Or),
-    */
     Ref(Ref),
 }
 
@@ -56,27 +54,24 @@ impl<'a> Convertible for f64 {
 }
 
 pub struct ItemBuilder<'a> {
-    pub ref_fetcher: RefFetcher<'a>,
+    pub categories: &'a Vec<Vec<Vec<Item>>>,
 }
 
 impl<'a> ItemBuilder<'a> {
-    pub fn finalize(&self, item: &mut Item) {
-        match item {
-            Item::And(v) => v.finalize(self),
-            Item::Ref(v) => v.finalize(&self.ref_fetcher),
-            _ => (),
-        };
-    }
-
     pub fn build(&'a self, item: &'a Item, output: &mut Vec<u8>) {
         match item {
             Item::Direct(v) => self.direct_build(v, output),
             Item::And(v) => v.build(self, output),
-            Item::Ref(v) => v.build(self, &self.ref_fetcher, output),
-            /*
+            Item::Ref(v) => v.build(self, output),
             Item::Or(v) => v.build(self, output),
-            */
         }
+    }
+
+    pub fn fetch_rule(&'a self, cat_idx: usize, rule_idx: usize) -> Option<&Item> {
+        let cat = self.categories.get(cat_idx)?;
+        let rules = cat.get(rule_idx)?;
+        let res = rules.get(0)?;
+        Some(res)
     }
 
     pub fn direct_build(&'a self, v: &Vec<u8>, output: &mut Vec<u8>) {
@@ -139,9 +134,9 @@ impl And {
         self
     }
 
-    pub fn finalize(&mut self, builder: &ItemBuilder) {
+    pub fn finalize(&mut self, fetcher: &RefFetcher) {
         for item in self.items.iter_mut() {
-            builder.finalize(item);
+            fetcher.finalize(item);
         }
     }
 
@@ -169,32 +164,56 @@ macro_rules! and {
     };
 }
 
-/*
 pub struct Or {
     pub choices: Vec<Item>,
 }
 
 /// Converts `Or` to an Item::Or instance
 impl Convertible for Or {
-    fn convert(&self) -> Item {
+    fn convert(self) -> Item {
         Item::Or(self)
     }
 }
 
 impl Or {
+    pub fn new() -> Or {
+        Or {
+            choices: Vec::new(),
+        }
+    }
+
     pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>) {
+        // TODO RANDOMNESS HERE
         let choice_idx = 0;
         builder.build(
             self.choices.get(choice_idx).expect("Shouldn't fail"),
             output,
         );
     }
+
+    pub fn finalize(&mut self, fetcher: &RefFetcher) {
+        for choice in self.choices.iter_mut() {
+            fetcher.finalize(choice);
+        }
+    }
+
+    pub fn add_item<T: Convertible>(mut self, choice: T) -> Self {
+        self.choices.push(choice.convert());
+        self
+    }
 }
-*/
+
+#[macro_export]
+macro_rules! or {
+    ($($item:expr),*) => {
+        crate::fields::Or::new()
+            $(.add_item($item))*
+    }
+}
 
 pub struct Ref {
-    pub ref_cat: &'static str,
-    pub ref_rule: &'static str,
+    pub ref_cat: String,
+    pub ref_rule: String,
     pub ref_info: Option<RefInfo>,
 }
 
@@ -206,21 +225,38 @@ impl Convertible for Ref {
 }
 
 impl Ref {
-    pub fn finalize(&mut self, ref_fetcher: &RefFetcher) {
-        if let None = self.ref_info {
-            self.ref_info = ref_fetcher.get_ref_info(self.ref_cat, self.ref_rule);
+    pub fn new<T>(ref_cat: T, ref_rule: T) -> Ref
+    where
+        T: Into<String>,
+    {
+        Ref {
+            ref_cat: ref_cat.into(),
+            ref_rule: ref_rule.into(),
+            ref_info: None,
         }
     }
-    pub fn build(&self, builder: &ItemBuilder, ref_fetcher: &RefFetcher, output: &mut Vec<u8>) {
+    pub fn finalize(&mut self, ref_fetcher: &RefFetcher) {
+        if let None = self.ref_info {
+            self.ref_info = ref_fetcher.get_ref_info(&self.ref_cat, &self.ref_rule);
+        }
+    }
+    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>) {
         let (cat_idx, rule_idx) = match &self.ref_info {
             None => panic!("Rule was never resolved! Was finalize not called?"),
             Some(v) => (v.cat_idx, v.rule_idx),
         };
-        let rule_val = ref_fetcher
+        let rule_val = builder
             .fetch_rule(cat_idx, rule_idx)
             .expect("Concrete reference no longer valid");
         builder.build(&rule_val, output);
     }
+}
+
+#[macro_export]
+macro_rules! reff {
+    ($cat:expr, $ref:expr) => {
+        crate::fields::Ref::new($cat, $ref)
+    };
 }
 
 #[cfg(test)]
@@ -234,10 +270,9 @@ mod tests {
             let ref_fetcher: RefFetcher = RefFetcher {
                 cat_map: &BTreeMap::new(),
                 rule_map: &BTreeMap::new(),
-                categories: &Vec::new(),
             };
             let item_builder: ItemBuilder = ItemBuilder {
-                ref_fetcher: ref_fetcher,
+                categories: &Vec::new(),
             };
             let mut tmp_vec: Vec<u8> = Vec::new();
             $item.build(&item_builder, &mut tmp_vec);
@@ -308,5 +343,12 @@ mod tests {
         let and_outer = and!(sep = "-", "hello", and_inner, "there");
         let res = build!(and_outer);
         assert_eq!(res, "hello-hello|there-there");
+    }
+
+    #[test]
+    fn test_or() {
+        let or = or!("hello", "there");
+        let res = build!(or);
+        assert_eq!(res == "hello" || res == "there", true);
     }
 }
