@@ -11,6 +11,8 @@ pub enum Item {
     And(And),
     Or(Or),
     Ref(Ref),
+    Str(Str),
+    Int(Int),
 }
 
 /// Used to convert the initial types used in the grammar from their source
@@ -65,6 +67,8 @@ impl<'a> ItemBuilder<'a> {
             Item::And(v) => v.build(self, output, rand),
             Item::Ref(v) => v.build(self, output, rand),
             Item::Or(v) => v.build(self, output, rand),
+            Item::Str(v) => v.build(self, output, rand),
+            Item::Int(v) => v.build(self, output, rand),
         }
     }
 
@@ -107,6 +111,10 @@ impl<'a> ItemBuilder<'a> {
         }
     }
 }
+
+// ----------------------------------------------------------------------------
+// AND
+// ----------------------------------------------------------------------------
 
 pub struct And {
     sep: Vec<u8>,
@@ -166,6 +174,10 @@ macro_rules! and {
     };
 }
 
+// ----------------------------------------------------------------------------
+// OR
+// ----------------------------------------------------------------------------
+
 pub struct Or {
     pub choices: Vec<Item>,
 }
@@ -212,6 +224,10 @@ macro_rules! or {
             $(.add_item($item))*
     }
 }
+
+// ----------------------------------------------------------------------------
+// Ref
+// ----------------------------------------------------------------------------
 
 pub struct Ref {
     pub ref_cat: String,
@@ -261,18 +277,129 @@ macro_rules! reff {
     };
 }
 
+// ----------------------------------------------------------------------------
+// Str
+// ----------------------------------------------------------------------------
+
+/// The Str struct will be able to create a random string in the range
+/// [min, max] using the specified charset
+pub struct Str {
+    min: usize,
+    max: usize,
+    charset: Vec<u8>,
+}
+
+impl Convertible for Str {
+    fn convert(self) -> Item {
+        Item::Str(self)
+    }
+}
+
+impl Str {
+    pub fn new<T>(min: usize, max: usize, charset: T) -> Self
+    where
+        T: Into<Vec<u8>>,
+    {
+        Str {
+            min,
+            max,
+            charset: charset.into(),
+        }
+    }
+
+    // no finalize needed
+
+    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
+        let len = rand.rand_int(self.min, self.max);
+        let mut res: Vec<u8> = vec![0; len];
+        for idx in 0..len {
+            let rand_idx = rand.rand_int(0, self.charset.len());
+            res[idx] = self.charset[rand_idx];
+        }
+        builder.direct_build(&res, output);
+    }
+}
+
+#[macro_export]
+macro_rules! string {
+    (min = $min:expr, max = $max:expr, charset = $charset:expr) => {
+        crate::fields::Str::new($min, $max, $charset)
+    };
+    (max = $max: expr, charset = $charset:expr) => {
+        string!(min = 0, max = $max, charset = $charset)
+    };
+    ($charset:expr) => {
+        string!(max = 20, charset = $charset)
+    };
+    () => {
+        string!("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+    };
+}
+
+// ----------------------------------------------------------------------------
+// Int
+// ----------------------------------------------------------------------------
+
+/// The Int struct will be able to create a random i64 in the range
+/// [min, max]
+pub struct Int {
+    min: i64,
+    max: i64,
+}
+
+impl Convertible for Int {
+    fn convert(self) -> Item {
+        Item::Int(self)
+    }
+}
+
+impl Int {
+    pub fn new(min: i64, max: i64) -> Self {
+        Int { min, max }
+    }
+
+    // no finalize needed
+
+    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
+        let val = rand.rand_int(self.min, self.max);
+        builder.direct_build(&val.to_string().as_bytes().to_vec(), output);
+    }
+}
+
+#[macro_export]
+macro_rules! int {
+    (min = $min:expr, max = $max:expr) => {
+        crate::fields::Int::new($min, $max)
+    };
+    (max = $max: expr) => {
+        int!(min = 0, max = $max)
+    };
+    () => {
+        int!(max = 1000)
+    };
+}
+
+// ----------------------------------------------------------------------------
+// Tests
+// ----------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::random::Rand;
     use std::str;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     macro_rules! build {
         ($item:expr) => {{
+            let start = SystemTime::now();
+            let since_the_epoch = start
+                .duration_since(UNIX_EPOCH)
+                .expect("Time went backwards");
             let item_builder: ItemBuilder = ItemBuilder {
                 categories: &Vec::new(),
             };
-            let mut rand = Rand::new(0);
+            let mut rand = Rand::new(since_the_epoch.as_nanos());
             let mut tmp_vec: Vec<u8> = Vec::new();
             $item.build(&item_builder, &mut tmp_vec, &mut rand);
             str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
@@ -349,5 +476,77 @@ mod tests {
         let or = or!("hello", "there");
         let res = build!(or);
         assert_eq!(res == "hello" || res == "there", true);
+    }
+
+    #[test]
+    fn test_str_full_macro() {
+        let charset = "hello";
+        let val = string!(min = 1, max = 5, charset = charset);
+        for _ in 0..100 {
+            let res = build!(val);
+            assert_eq!(res.chars().all(|x| charset.contains(x)), true);
+        }
+    }
+
+    #[test]
+    fn test_str_max_charset_macro() {
+        let charset = "hello";
+        let val = string!(max = 5, charset = charset);
+        for _ in 0..100 {
+            let res = build!(val);
+            assert_eq!(res.chars().all(|x| charset.contains(x)), true);
+        }
+    }
+
+    #[test]
+    fn test_str_charset_macro() {
+        let charset = "hello";
+        let val = string!(charset);
+        for _ in 0..100 {
+            let res = build!(val);
+            assert_eq!(res.chars().all(|x| charset.contains(x)), true);
+        }
+    }
+
+    #[test]
+    fn test_str_default_macro() {
+        let charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        let val = string!();
+        for _ in 0..100 {
+            let res = build!(val);
+            assert_eq!(res.chars().all(|x| charset.contains(x)), true);
+        }
+    }
+
+    #[test]
+    fn test_int_full_macro() {
+        let choices = [3, 4, 5, 6];
+        let choices: Vec<String> = choices.iter().map(|x| x.to_string()).collect();
+        let val = int!(min = 3, max = 7);
+        for _ in 0..100 {
+            let res = build!(val);
+            assert_eq!(choices.contains(&res), true);
+        }
+    }
+
+    #[test]
+    fn test_int_max_macro() {
+        let choices = [0, 1, 2, 3, 4, 5, 6];
+        let choices: Vec<String> = choices.iter().map(|x| x.to_string()).collect();
+        let val = int!(max = 7);
+        for _ in 0..100 {
+            let res = build!(val);
+            assert_eq!(choices.contains(&res), true);
+        }
+    }
+
+    #[test]
+    fn test_int_default_macro() {
+        let choices: Vec<String> = (0..1001).map(|x| x.to_string()).collect();
+        let val = int!();
+        for _ in 0..1000 {
+            let res = build!(val);
+            assert_eq!(choices.contains(&res), true);
+        }
     }
 }
