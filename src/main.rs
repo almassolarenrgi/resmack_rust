@@ -23,7 +23,18 @@ pub fn main() {
         .add_rule("TestRule", and!(_ref!("RefdRule"), "World"))
         .add_rule("TestRule2", and!(_ref!("TestRule"), "World"))
         .add_rule("TestRule2", and!(_ref!("TestRule"), "World"))
-        .add_rule("TestRule2", and!(or!(1, 2, 3, 4, 5)))
+        .add_rule("TestRule2", int!(min = 5, max = 1337))
+        .add_rule(
+            "TestRule2",
+            and!(or!(
+                1,
+                2,
+                3,
+                4,
+                5,
+                string!(min = 5, max = 10, charset = "abcdefg")
+            )),
+        )
         .add_rule("TestRule2", and!(1000.5))
         .add_rule("TestRule2", "---World");
     rules.finalize();

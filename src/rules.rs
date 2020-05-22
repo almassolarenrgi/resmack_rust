@@ -101,12 +101,22 @@ impl RuleSet {
             .expect("Invalid RefInfo")
             .get(ref_info.rule_idx)
             .expect("Invalid RefInfo");
-        let rand_idx = rand.rand_int(0, rule_list.len());
+        let rand_idx = if rule_list.len() == 1 {
+            0
+        } else {
+            rand.rand_int(0, rule_list.len())
+        };
         let rule = rule_list.get(rand_idx).expect("Random index was incorrect");
         builder.build(rule, output, rand);
     }
 
-    pub fn get_rule<'a, T>(&'a self, cat_name: T, rule_name: T, rand: &mut Rand) -> Option<&'a Item>
+    #[allow(dead_code)]
+    pub fn get_rule_slow<'a, T>(
+        &'a self,
+        cat_name: T,
+        rule_name: T,
+        rand: &mut Rand,
+    ) -> Option<&'a Item>
     where
         T: Into<String>,
     {
@@ -120,11 +130,16 @@ impl RuleSet {
             .get(ref_info.cat_idx)?
             .get(ref_info.rule_idx)?;
 
-        let rand_idx = rand.rand_int(0, rule_list.len());
+        let rand_idx = if rule_list.len() == 1 {
+            0
+        } else {
+            rand.rand_int(0, rule_list.len())
+        };
 
         Some(rule_list.get(rand_idx).expect("Random index was incorrect"))
     }
 
+    #[allow(dead_code)]
     pub fn build_rule_slow<'a, T>(
         &'a self,
         cat_name: T,
@@ -139,7 +154,7 @@ impl RuleSet {
         };
 
         let rule = self
-            .get_rule(cat_name, rule_name, rand)
+            .get_rule_slow(cat_name, rule_name, rand)
             .expect("Rule does not exist!");
         builder.build(rule, output, rand);
     }
@@ -200,7 +215,7 @@ mod tests {
         assert_eq!(rules.categories.len(), 1);
         assert_eq!(rules.categories[0].len(), 1);
 
-        let rule = rules.get_rule("test", "rule", &mut rand);
+        let rule = rules.get_rule_slow("test", "rule", &mut rand);
         assert_eq!(rule.is_some(), true);
     }
 
