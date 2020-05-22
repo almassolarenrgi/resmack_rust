@@ -1,4 +1,4 @@
-use num::{Num, NumCast, ToPrimitive};
+//use num::{Num, NumCast, ToPrimitive};
 
 /// The rand struct exposes the `rand_int` function for number generation.
 ///
@@ -8,62 +8,57 @@ use num::{Num, NumCast, ToPrimitive};
 /// let seed = 1337;
 /// // must be mutable!
 /// let mut rand = Rand::new(seed);
-/// let res = rand.rand_int(-5, 5);
+/// let res = rand.rand_i64(-5, 5);
 ///
 /// for _ in (0..100) {
 ///     assert_eq!(-5 <= res && res < 5, true);
 /// }
 /// ```
 pub struct Rand {
-    seed: [u32; 4],
+    seed: [u64; 2],
 }
 
 impl Rand {
     pub fn new(seed: u128) -> Rand {
         Rand {
             seed: [
-                (seed & 0xffffffff) as u32,
-                ((seed >> 32) & 0xffffffff) as u32,
-                ((seed >> 64) & 0xffffffff) as u32,
-                ((seed >> 96) & 0xffffffff) as u32,
+                (seed & ((1 << 64) - 1)) as u64,
+                ((seed >> 64) & ((1 << 64) - 1)) as u64,
             ],
         }
     }
 
     /// Generates a new value in the range `[min, max)`
-    pub fn rand_int<N: NumCast + Num + PartialOrd + Copy>(&mut self, min: N, max: N) -> N {
+    pub fn rand_u64(&mut self, min: u64, max: u64) -> u64 {
         let num = self.next();
-        N::from(num).unwrap()
+        let diff = max - min;
+        let res = num % diff;
+        res + min
     }
 
-    fn next(&mut self) -> u32 {
-        let res: u32;
-        {
-            res = Self::rotl(self.seed[1] * 5, 7) * 9;
-        }
-
-        let t = self.seed[1] << 9;
-
-        self.seed[2] ^= self.seed[0];
-        self.seed[3] ^= self.seed[1];
-        self.seed[1] ^= self.seed[2];
-        self.seed[0] ^= self.seed[3];
-
-        self.seed[2] ^= t;
-
-        self.seed[3] = Self::rotl(self.seed[3], 11);
-
-        res
+    /// Generates a new value in the range `[min, max)`
+    pub fn rand_i64(&mut self, min: i64, max: i64) -> i64 {
+        let num = self.next();
+        let diff: u64 = (max - min) as u64;
+        let res = num % diff;
+        (res as i64) + min
     }
 
-    #[inline]
-    fn rotl(x: u32, k: usize) -> u32 {
-        (x << k) | (x >> (32 - k))
+    fn next(&mut self) -> u64 {
+        let s0 = self.seed[0];
+        let mut s1 = self.seed[1];
+        let result = s0.wrapping_mul(5).rotate_left(7).wrapping_mul(9);
+
+        s1 ^= s0;
+        self.seed[0] = s0.rotate_left(24) ^ s1 ^ (s1 << 16);
+        self.seed[1] = s1.rotate_left(37);
+
+        result
     }
 }
 
 /*
- * http://xoshiro.di.unimi.it/xoshiro128starstar.c
+ * http://prng.di.unimi.it/xoroshiro128starstar.c
  *
 
 /*  Written in 2018 by David Blackman and Sebastiano Vigna (vigna@acm.org)
@@ -76,40 +71,34 @@ See <http://creativecommons.org/publicdomain/zero/1.0/>. */
 
 #include <stdint.h>
 
-/* This is xoshiro128** 1.1, one of our 32-bit all-purpose, rock-solid
-   generators. It has excellent speed, a state size (128 bits) that is
-   large enough for mild parallelism, and it passes all tests we are aware
-   of.
+/* This is xoroshiro128** 1.0, one of our all-purpose, rock-solid,
+   small-state generators. It is extremely (sub-ns) fast and it passes all
+   tests we are aware of, but its state space is large enough only for
+   mild parallelism.
 
-   Note that version 1.0 had mistakenly s[0] instead of s[1] as state
-   word passed to the scrambler.
+   For generating just floating-point numbers, xoroshiro128+ is even
+   faster (but it has a very mild bias, see notes in the comments).
 
-   For generating just single-precision (i.e., 32-bit) floating-point
-   numbers, xoshiro128+ is even faster.
+   The state must be seeded so that it is not everywhere zero. If you have
+   a 64-bit seed, we suggest to seed a splitmix64 generator and use its
+   output to fill s. */
 
-   The state must be seeded so that it is not everywhere zero. */
 
-
-static inline uint32_t rotl(const uint32_t x, int k) {
-    return (x << k) | (x >> (32 - k));
+static inline uint64_t rotl(const uint64_t x, int k) {
+    return (x << k) | (x >> (64 - k));
 }
 
 
-static uint32_t s[4];
+static uint64_t s[2];
 
-uint32_t next(void) {
-    const uint32_t result = rotl(s[1] * 5, 7) * 9;
+uint64_t next(void) {
+    const uint64_t s0 = s[0];
+    uint64_t s1 = s[1];
+    const uint64_t result = rotl(s0 * 5, 7) * 9;
 
-    const uint32_t t = s[1] << 9;
-
-    s[2] ^= s[0];
-    s[3] ^= s[1];
-    s[1] ^= s[2];
-    s[0] ^= s[3];
-
-    s[2] ^= t;
-
-    s[3] = rotl(s[3], 11);
+    s1 ^= s0;
+    s[0] = rotl(s0, 24) ^ s1 ^ (s1 << 16); // a, b
+    s[1] = rotl(s1, 37); // c
 
     return result;
 }
@@ -120,27 +109,21 @@ uint32_t next(void) {
    non-overlapping subsequences for parallel computations. */
 
 void jump(void) {
-    static const uint32_t JUMP[] = { 0x8764000b, 0xf542d2d3, 0x6fa035c3, 0x77f2db5b };
+    static const uint64_t JUMP[] = { 0xdf900294d8f554a5, 0x170865df4b3201fc };
 
-    uint32_t s0 = 0;
-    uint32_t s1 = 0;
-    uint32_t s2 = 0;
-    uint32_t s3 = 0;
+    uint64_t s0 = 0;
+    uint64_t s1 = 0;
     for(int i = 0; i < sizeof JUMP / sizeof *JUMP; i++)
-        for(int b = 0; b < 32; b++) {
-            if (JUMP[i] & UINT32_C(1) << b) {
+        for(int b = 0; b < 64; b++) {
+            if (JUMP[i] & UINT64_C(1) << b) {
                 s0 ^= s[0];
                 s1 ^= s[1];
-                s2 ^= s[2];
-                s3 ^= s[3];
             }
             next();
         }
 
     s[0] = s0;
     s[1] = s1;
-    s[2] = s2;
-    s[3] = s3;
 }
 
 
@@ -150,27 +133,21 @@ void jump(void) {
    subsequences for parallel distributed computations. */
 
 void long_jump(void) {
-    static const uint32_t LONG_JUMP[] = { 0xb523952e, 0x0b6f099f, 0xccf5a0ef, 0x1c580662 };
+    static const uint64_t LONG_JUMP[] = { 0xd2a98b26625eee7b, 0xdddf9b1090aa7ac1 };
 
-    uint32_t s0 = 0;
-    uint32_t s1 = 0;
-    uint32_t s2 = 0;
-    uint32_t s3 = 0;
+    uint64_t s0 = 0;
+    uint64_t s1 = 0;
     for(int i = 0; i < sizeof LONG_JUMP / sizeof *LONG_JUMP; i++)
-        for(int b = 0; b < 32; b++) {
-            if (LONG_JUMP[i] & UINT32_C(1) << b) {
+        for(int b = 0; b < 64; b++) {
+            if (LONG_JUMP[i] & UINT64_C(1) << b) {
                 s0 ^= s[0];
                 s1 ^= s[1];
-                s2 ^= s[2];
-                s3 ^= s[3];
             }
             next();
         }
 
     s[0] = s0;
     s[1] = s1;
-    s[2] = s2;
-    s[3] = s3;
 }
 
  */

@@ -41,7 +41,7 @@ pub fn main() {
 
     let start = time::Instant::now();
     let mut total_size: usize = 0;
-    let total_seconds = 3;
+    let total_seconds = 10;
     let ref_info = rules
         .get_ref_info("test", "TestRule2")
         .expect("Should exist");
