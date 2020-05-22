@@ -104,7 +104,7 @@ impl RuleSet {
         let rand_idx = if rule_list.len() == 1 {
             0
         } else {
-            rand.rand_int(0, rule_list.len())
+            rand.rand_u64(0, rule_list.len() as u64) as usize
         };
         let rule = rule_list.get(rand_idx).expect("Random index was incorrect");
         builder.build(rule, output, rand);
@@ -133,7 +133,7 @@ impl RuleSet {
         let rand_idx = if rule_list.len() == 1 {
             0
         } else {
-            rand.rand_int(0, rule_list.len())
+            rand.rand_u64(0, rule_list.len() as u64) as usize
         };
 
         Some(rule_list.get(rand_idx).expect("Random index was incorrect"))

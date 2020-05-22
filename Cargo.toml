@@ -1,14 +1,13 @@
 [package]
 name = "resmack"
 version = "0.1.0"
-authors = ["James Johnson <d0c.s4vage@github.com>"]
+authors = ["James Johnson <d0c.s4vage@gmail.com>"]
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rand = ""
-rand_pcg = "*"
+num = "*"
 
 [profile.dev]
 opt-level = 0

@@ -75,7 +75,7 @@ impl<'a> ItemBuilder<'a> {
     pub fn fetch_rule(&'a self, cat_idx: usize, rule_idx: usize, rand: &mut Rand) -> Option<&Item> {
         let cat = self.categories.get(cat_idx)?;
         let rules = cat.get(rule_idx)?;
-        let rand_idx = rand.rand_int(0, rules.len());
+        let rand_idx = rand.rand_u64(0, rules.len() as u64) as usize;
         let res = rules.get(rand_idx)?;
         Some(res)
     }
@@ -197,9 +197,11 @@ impl Or {
     }
 
     pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
-        let choice_idx = rand.rand_int(0, self.choices.len());
+        let choice_idx = rand.rand_u64(0, self.choices.len() as u64);
         builder.build(
-            self.choices.get(choice_idx).expect("Shouldn't fail"),
+            self.choices
+                .get(choice_idx as usize)
+                .expect("Shouldn't fail"),
             output,
             rand,
         );
@@ -284,8 +286,8 @@ macro_rules! reff {
 /// The Str struct will be able to create a random string in the range
 /// [min, max] using the specified charset
 pub struct Str {
-    min: usize,
-    max: usize,
+    min: u64,
+    max: u64,
     charset: Vec<u8>,
 }
 
@@ -296,7 +298,7 @@ impl Convertible for Str {
 }
 
 impl Str {
-    pub fn new<T>(min: usize, max: usize, charset: T) -> Self
+    pub fn new<T>(min: u64, max: u64, charset: T) -> Self
     where
         T: Into<Vec<u8>>,
     {
@@ -310,10 +312,10 @@ impl Str {
     // no finalize needed
 
     pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
-        let len = rand.rand_int(self.min, self.max);
+        let len = rand.rand_u64(self.min, self.max) as usize;
         let mut res: Vec<u8> = vec![0; len];
         for idx in 0..len {
-            let rand_idx = rand.rand_int(0, self.charset.len());
+            let rand_idx = rand.rand_u64(0, self.charset.len() as u64) as usize;
             res[idx] = self.charset[rand_idx];
         }
         builder.direct_build(&res, output);
@@ -361,7 +363,7 @@ impl Int {
     // no finalize needed
 
     pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
-        let val = rand.rand_int(self.min, self.max);
+        let val = rand.rand_i64(self.min, self.max);
         builder.direct_build(&val.to_string().as_bytes().to_vec(), output);
     }
 }
