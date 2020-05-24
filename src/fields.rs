@@ -89,7 +89,7 @@ impl<'a> ItemBuilder<'a> {
     }
 
     fn safe_build(item: &Vec<u8>, output: &mut Vec<u8>) {
-        output.extend_from_slice(item);
+        output.extend(item);
     }
     fn unsafe_build(item: &Vec<u8>, output: &mut Vec<u8>) {
         unsafe {
