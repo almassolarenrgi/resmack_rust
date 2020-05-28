@@ -9,7 +9,7 @@ use std::time;
 
 macro_rules! _ref {
     ($ref_name:expr) => {
-        reff!("test", $ref_name)
+        reff!("test-def", $ref_name)
     };
 }
 
@@ -17,10 +17,11 @@ pub fn main() {
     let mut rand = Rand::new(0);
     let mut rules = RuleSet::new();
     let rules = rules
-        .set_category("test")
+        .set_category("test-def")
         .add_rule("Special", "SPECIAL ONE")
         .add_rule("RefdRule", or!("Hello", "Blah", _ref!("Special")))
         .add_rule("TestRule", and!(_ref!("RefdRule"), "World"))
+        .set_category("test")
         .add_rule("TestRule2", and!(_ref!("TestRule"), "World"))
         .add_rule("TestRule2", and!(_ref!("TestRule"), "World"))
         .add_rule("TestRule2", int!(min = 5, max = 1337))
@@ -42,9 +43,7 @@ pub fn main() {
     let start = time::Instant::now();
     let mut total_size: usize = 0;
     let total_seconds = 10;
-    let ref_info = rules
-        .get_ref_info("test", "TestRule2")
-        .expect("Should exist");
+    let ref_info = rules.get_ref_info("test", "ANY").expect("Should exist");
     let mut iters: usize = 0;
     let mut output: Vec<u8> = Vec::new();
     while (time::Instant::now() - start).as_millis() < (total_seconds * 1000) {
