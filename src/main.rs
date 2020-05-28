@@ -43,7 +43,9 @@ pub fn main() {
     let start = time::Instant::now();
     let mut total_size: usize = 0;
     let total_seconds = 10;
-    let ref_info = rules.get_ref_info("test", "ANY").expect("Should exist");
+    let ref_info = rules
+        .get_ref_info("test", "TestRule2")
+        .expect("Should exist");
     let mut iters: usize = 0;
     let mut output: Vec<u8> = Vec::new();
     while (time::Instant::now() - start).as_millis() < (total_seconds * 1000) {
