@@ -1,5 +1,3 @@
-//use num::{Num, NumCast, ToPrimitive};
-
 /// The rand struct exposes the `rand_int` function for number generation.
 ///
 /// ```
