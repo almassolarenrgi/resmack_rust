@@ -27,6 +27,7 @@ impl Rand {
     }
 
     /// Generates a new value in the range `[min, max)`
+    #[inline]
     pub fn rand_u64(&mut self, min: u64, max: u64) -> u64 {
         let num = self.next();
         let diff = max - min;
@@ -35,6 +36,7 @@ impl Rand {
     }
 
     /// Generates a new value in the range `[min, max)`
+    #[inline]
     pub fn rand_i64(&mut self, min: i64, max: i64) -> i64 {
         let num = self.next();
         let diff: u64 = (max - min) as u64;
@@ -42,6 +44,7 @@ impl Rand {
         (res as i64) + min
     }
 
+    #[inline]
     fn next(&mut self) -> u64 {
         let s0 = self.seed[0];
         let mut s1 = self.seed[1];
