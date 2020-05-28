@@ -1,3 +1,8 @@
+extern crate rand;
+
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+
 /// The rand struct exposes the `rand_int` function for number generation.
 ///
 /// ```
@@ -17,7 +22,10 @@ pub struct Rand {
 }
 
 impl Rand {
-    pub fn new(seed: u128) -> Rand {
+    pub fn new(seed: u64) -> Rand {
+        let mut rng: StdRng = SeedableRng::seed_from_u64(seed);
+        let seed: u128 = rng.gen();
+
         Rand {
             seed: [
                 (seed & ((1 << 64) - 1)) as u64,

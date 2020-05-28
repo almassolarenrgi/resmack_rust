@@ -168,6 +168,7 @@ impl<'a> RefFetcher<'a> {
             Item::And(v) => v.finalize(&self),
             Item::Ref(v) => v.finalize(&self),
             Item::Or(v) => v.finalize(&self),
+            Item::Opt(v) => v.finalize(&self),
             _ => (),
         };
     }
