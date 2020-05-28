@@ -16,6 +16,7 @@ pub enum Item {
     Ref(Ref),
     Str(Str),
     Int(Int),
+    Opt(Opt),
 }
 
 impl fmt::Display for Item {
@@ -27,6 +28,7 @@ impl fmt::Display for Item {
             Item::Ref(v) => v.fmt(f),
             Item::Str(v) => v.fmt(f),
             Item::Int(v) => v.fmt(f),
+            Item::Opt(v) => v.fmt(f),
         }
     }
 }
@@ -89,6 +91,7 @@ impl<'a> ItemBuilder<'a> {
             Item::And(v) => v.build(self, output, rand),
             Item::Ref(v) => v.build(self, output, rand),
             Item::Or(v) => v.build(self, output, rand),
+            Item::Opt(v) => v.build(self, output, rand),
             Item::Str(v) => v.build(self, output, rand),
             Item::Int(v) => v.build(self, output, rand),
         }
@@ -172,7 +175,7 @@ impl fmt::Display for And {
             str::from_utf8(&self.sep).unwrap(),
             self.items
                 .iter()
-                .map({ |x| format!("{}", x) })
+                .map(|x| format!("{}", x))
                 .collect::<Vec<String>>()
                 .join(", ")
         )
@@ -248,7 +251,7 @@ impl fmt::Display for Or {
             "Or<{}>",
             self.choices
                 .iter()
-                .map({ |x| format!("{}", x) })
+                .map(|x| format!("{}", x))
                 .collect::<Vec<String>>()
                 .join(", ")
         )
@@ -481,6 +484,56 @@ macro_rules! int {
 }
 
 // ----------------------------------------------------------------------------
+// Opt
+// ----------------------------------------------------------------------------
+
+/// The Int struct will be able to create a random i64 in the range
+/// [min, max]
+pub struct Opt {
+    item: Box<Item>,
+}
+
+impl Convertible for Opt {
+    fn convert(self) -> Item {
+        Item::Opt(self)
+    }
+}
+
+impl fmt::Display for Opt {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}?", self.item)
+    }
+}
+
+impl Opt {
+    pub fn new<T: Convertible>(item: T) -> Self {
+        Opt {
+            item: Box::new(item.convert()),
+        }
+    }
+
+    pub fn finalize(&mut self, fetcher: &RefFetcher) {
+        fetcher.finalize(&mut self.item);
+    }
+
+    #[inline]
+    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
+        let rand_val = rand.rand_u64(0, 2);
+        if rand_val == 0 {
+            return;
+        }
+        builder.build(&self.item, output, rand);
+    }
+}
+
+#[macro_export]
+macro_rules! opt {
+    ($item:expr) => {
+        crate::fields::Opt::new($item)
+    };
+}
+
+// ----------------------------------------------------------------------------
 // Tests
 // ----------------------------------------------------------------------------
 
@@ -500,9 +553,17 @@ mod tests {
             let item_builder: ItemBuilder = ItemBuilder {
                 categories: &Vec::new(),
             };
-            let mut rand = Rand::new(since_the_epoch.as_nanos());
+            let mut rand = Rand::new(since_the_epoch.as_secs());
             let mut tmp_vec: Vec<u8> = Vec::new();
             $item.build(&item_builder, &mut tmp_vec, &mut rand);
+            str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
+        }};
+        (rand=$rand:expr, $item:expr) => {{
+            let item_builder: ItemBuilder = ItemBuilder {
+                categories: &Vec::new(),
+            };
+            let mut tmp_vec: Vec<u8> = Vec::new();
+            $item.build(&item_builder, &mut tmp_vec, &mut $rand);
             str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
         }};
     }
@@ -649,5 +710,20 @@ mod tests {
             let res = build!(val);
             assert_eq!(choices.contains(&res), true);
         }
+    }
+
+    #[test]
+    fn test_opt() {
+        let mut build_count = 0;
+        let val = opt!("a");
+        let iters = 100;
+
+        let mut rand = Rand::new(100);
+
+        for _ in 0..iters {
+            let res = build!(rand = rand, val);
+            build_count += res.len();
+        }
+        assert_eq!(0 < build_count && build_count < iters, true);
     }
 }
