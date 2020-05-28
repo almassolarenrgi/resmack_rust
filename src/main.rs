@@ -9,7 +9,7 @@ use std::time;
 
 macro_rules! _ref {
     ($ref_name:expr) => {
-        reff!("test", $ref_name)
+        reff!("test-def", $ref_name)
     };
 }
 
@@ -17,10 +17,11 @@ pub fn main() {
     let mut rand = Rand::new(0);
     let mut rules = RuleSet::new();
     let rules = rules
-        .set_category("test")
+        .set_category("test-def")
         .add_rule("Special", "SPECIAL ONE")
         .add_rule("RefdRule", or!("Hello", "Blah", _ref!("Special")))
         .add_rule("TestRule", and!(_ref!("RefdRule"), "World"))
+        .set_category("test")
         .add_rule("TestRule2", and!(_ref!("TestRule"), "World"))
         .add_rule("TestRule2", and!(_ref!("TestRule"), "World"))
         .add_rule("TestRule2", int!(min = 5, max = 1337))

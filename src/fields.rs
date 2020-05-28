@@ -1,7 +1,10 @@
 #![macro_use]
 
+use std::fmt;
+use std::str;
+
 use super::random::Rand;
-use super::rules::{RefFetcher, RefInfo};
+use super::rules::{RefFetcher, RefInfo, RuleKeys};
 
 const SAFE_BUILD: bool = true;
 
@@ -15,6 +18,19 @@ pub enum Item {
     Int(Int),
 }
 
+impl fmt::Display for Item {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Item::Direct(v) => write!(f, "u8[{}]", str::from_utf8(v).unwrap()),
+            Item::And(v) => v.fmt(f),
+            Item::Or(v) => v.fmt(f),
+            Item::Ref(v) => v.fmt(f),
+            Item::Str(v) => v.fmt(f),
+            Item::Int(v) => v.fmt(f),
+        }
+    }
+}
+
 /// Used to convert the initial types used in the grammar from their source
 /// types to one of the Item:: types.
 pub trait Convertible: Sized {
@@ -23,6 +39,7 @@ pub trait Convertible: Sized {
 
 /// Converts `String` to an Item::Direct instance
 impl<'a> Convertible for String {
+    #[inline]
     fn convert(self) -> Item {
         Item::Direct(self.as_bytes().to_vec())
     }
@@ -30,6 +47,7 @@ impl<'a> Convertible for String {
 
 /// Converts `String` to an Item::Direct instance
 impl<'a> Convertible for &str {
+    #[inline]
     fn convert(self) -> Item {
         Item::Direct(self.as_bytes().to_vec())
     }
@@ -37,6 +55,7 @@ impl<'a> Convertible for &str {
 
 /// Converts `usize` (default for numbers) to an Item::Direct instance
 impl<'a> Convertible for usize {
+    #[inline]
     fn convert(self) -> Item {
         Item::Direct(self.to_string().as_bytes().to_vec())
     }
@@ -44,6 +63,7 @@ impl<'a> Convertible for usize {
 
 /// Converts `usize` (default for numbers) to an Item::Direct instance
 impl<'a> Convertible for i32 {
+    #[inline]
     fn convert(self) -> Item {
         Item::Direct(self.to_string().as_bytes().to_vec())
     }
@@ -51,6 +71,7 @@ impl<'a> Convertible for i32 {
 
 /// Converts `f64` (default for floats) to an Item::Direct instance
 impl<'a> Convertible for f64 {
+    #[inline]
     fn convert(self) -> Item {
         Item::Direct(self.to_string().as_bytes().to_vec())
     }
@@ -61,6 +82,7 @@ pub struct ItemBuilder<'a> {
 }
 
 impl<'a> ItemBuilder<'a> {
+    #[inline]
     pub fn build(&'a self, item: &'a Item, output: &mut Vec<u8>, rand: &mut Rand) {
         match item {
             Item::Direct(v) => self.direct_build(v, output),
@@ -72,14 +94,24 @@ impl<'a> ItemBuilder<'a> {
         }
     }
 
-    pub fn fetch_rule(&'a self, cat_idx: usize, rule_idx: usize, rand: &mut Rand) -> Option<&Item> {
+    #[inline]
+    pub fn fetch_rule(
+        &'a self,
+        cat_idx: usize,
+        mut rule_idx: usize,
+        rand: &mut Rand,
+    ) -> Option<&Item> {
         let cat = self.categories.get(cat_idx)?;
+        if rule_idx == (RuleKeys::Any as usize) {
+            rule_idx = rand.rand_u64(0, cat.len() as u64) as usize;
+        }
         let rules = cat.get(rule_idx)?;
         let rand_idx = rand.rand_u64(0, rules.len() as u64) as usize;
         let res = rules.get(rand_idx)?;
         Some(res)
     }
 
+    #[inline]
     pub fn direct_build(&'a self, v: &Vec<u8>, output: &mut Vec<u8>) {
         if SAFE_BUILD {
             Self::safe_build(v, output);
@@ -88,9 +120,12 @@ impl<'a> ItemBuilder<'a> {
         }
     }
 
+    #[inline]
     fn safe_build(item: &Vec<u8>, output: &mut Vec<u8>) {
         output.extend(item);
     }
+
+    #[inline]
     fn unsafe_build(item: &Vec<u8>, output: &mut Vec<u8>) {
         unsafe {
             let old_size = output.len();
@@ -123,8 +158,24 @@ pub struct And {
 
 /// Converts `And` to an Item::And instance
 impl Convertible for And {
+    #[inline]
     fn convert(self) -> Item {
         Item::And(self)
+    }
+}
+
+impl fmt::Display for And {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "And<sep={} {}>",
+            str::from_utf8(&self.sep).unwrap(),
+            self.items
+                .iter()
+                .map({ |x| format!("{}", x) })
+                .collect::<Vec<String>>()
+                .join(", ")
+        )
     }
 }
 
@@ -150,6 +201,7 @@ impl And {
         }
     }
 
+    #[inline]
     pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
         let mut idx = 0;
         for item in self.items.iter() {
@@ -189,6 +241,20 @@ impl Convertible for Or {
     }
 }
 
+impl fmt::Display for Or {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Or<{}>",
+            self.choices
+                .iter()
+                .map({ |x| format!("{}", x) })
+                .collect::<Vec<String>>()
+                .join(", ")
+        )
+    }
+}
+
 impl Or {
     pub fn new() -> Or {
         Or {
@@ -196,6 +262,7 @@ impl Or {
         }
     }
 
+    #[inline]
     pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
         let choice_idx = rand.rand_u64(0, self.choices.len() as u64);
         builder.build(
@@ -244,6 +311,12 @@ impl Convertible for Ref {
     }
 }
 
+impl fmt::Display for Ref {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Ref<{}:{}>", self.ref_cat, self.ref_rule)
+    }
+}
+
 impl Ref {
     pub fn new<T>(ref_cat: T, ref_rule: T) -> Ref
     where
@@ -255,14 +328,20 @@ impl Ref {
             ref_info: None,
         }
     }
+
     pub fn finalize(&mut self, ref_fetcher: &RefFetcher) {
         if let None = self.ref_info {
             self.ref_info = ref_fetcher.get_ref_info(&self.ref_cat, &self.ref_rule);
         }
     }
+
+    #[inline]
     pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
         let (cat_idx, rule_idx) = match &self.ref_info {
-            None => panic!("Rule was never resolved! Was finalize not called?"),
+            None => panic!(format!(
+                "{} was never resolved! Was finalize not called?",
+                self
+            )),
             Some(v) => (v.cat_idx, v.rule_idx),
         };
         let rule_val = builder
@@ -297,6 +376,18 @@ impl Convertible for Str {
     }
 }
 
+impl fmt::Display for Str {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Str<min={} max={} charset={:?}>",
+            self.min,
+            self.max,
+            str::from_utf8(&self.charset).unwrap(),
+        )
+    }
+}
+
 impl Str {
     pub fn new<T>(min: u64, max: u64, charset: T) -> Self
     where
@@ -311,6 +402,7 @@ impl Str {
 
     // no finalize needed
 
+    #[inline]
     pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
         let len = rand.rand_u64(self.min, self.max) as usize;
         let mut res: Vec<u8> = vec![0; len];
@@ -355,6 +447,12 @@ impl Convertible for Int {
     }
 }
 
+impl fmt::Display for Int {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Int<min={} max={}>", self.min, self.max,)
+    }
+}
+
 impl Int {
     pub fn new(min: i64, max: i64) -> Self {
         Int { min, max }
@@ -362,6 +460,7 @@ impl Int {
 
     // no finalize needed
 
+    #[inline]
     pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
         let val = rand.rand_i64(self.min, self.max);
         builder.direct_build(&val.to_string().as_bytes().to_vec(), output);

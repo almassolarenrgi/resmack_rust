@@ -12,6 +12,11 @@ pub struct RuleSet {
     curr_cat: String,
 }
 
+#[repr(usize)]
+pub enum RuleKeys {
+    Any = std::usize::MAX,
+}
+
 impl RuleSet {
     pub fn new() -> RuleSet {
         RuleSet {
@@ -58,7 +63,8 @@ impl RuleSet {
             }
             Some(v) => *v,
         };
-        cat[rule_idx].push(rule_value.convert());
+        let converted = rule_value.convert();
+        cat[rule_idx].push(converted); //rule_value.convert());
         self
     }
 
@@ -85,7 +91,11 @@ impl RuleSet {
         let rule_name = rule_name.into();
 
         let cat_idx = *self.cat_map.get(&cat_name)?;
-        let rule_idx = *self.rule_map.get(&format!("{}:{}", cat_name, rule_name))?;
+        let rule_idx = if rule_name == "ANY" {
+            RuleKeys::Any as usize
+        } else {
+            *self.rule_map.get(&format!("{}:{}", cat_name, rule_name))?
+        };
 
         Some(RefInfo { cat_idx, rule_idx })
     }
@@ -95,18 +105,10 @@ impl RuleSet {
             categories: &self.categories,
         };
 
-        let rule_list = self
-            .categories
-            .get(ref_info.cat_idx)
-            .expect("Invalid RefInfo")
-            .get(ref_info.rule_idx)
-            .expect("Invalid RefInfo");
-        let rand_idx = if rule_list.len() == 1 {
-            0
-        } else {
-            rand.rand_u64(0, rule_list.len() as u64) as usize
-        };
-        let rule = rule_list.get(rand_idx).expect("Random index was incorrect");
+        let rule = builder
+            .fetch_rule(ref_info.cat_idx, ref_info.rule_idx, rand)
+            .unwrap();
+
         builder.build(rule, output, rand);
     }
 
@@ -120,23 +122,18 @@ impl RuleSet {
     where
         T: Into<String>,
     {
-        let cat_name = cat_name.into();
-        let rule_name = rule_name.into();
-
         let ref_info = self.get_ref_info(cat_name, rule_name)?;
 
-        let rule_list = self
-            .categories
-            .get(ref_info.cat_idx)?
-            .get(ref_info.rule_idx)?;
-
-        let rand_idx = if rule_list.len() == 1 {
-            0
+        let cat = self.categories.get(ref_info.cat_idx)?;
+        let rule_idx = if ref_info.rule_idx == (RuleKeys::Any as usize) {
+            rand.rand_u64(0, cat.len() as u64) as usize
         } else {
-            rand.rand_u64(0, rule_list.len() as u64) as usize
+            ref_info.rule_idx
         };
-
-        Some(rule_list.get(rand_idx).expect("Random index was incorrect"))
+        let rules = cat.get(rule_idx)?;
+        let rand_idx = rand.rand_u64(0, rules.len() as u64) as usize;
+        let res = rules.get(rand_idx)?;
+        Some(res)
     }
 
     #[allow(dead_code)]
@@ -183,8 +180,13 @@ impl<'a> RefFetcher<'a> {
         let rule_name = rule_name.into();
 
         let cat_idx = *self.cat_map.get(&cat_name)?;
-        let rule_key = format!("{}:{}", cat_name, rule_name);
-        let rule_idx = *self.rule_map.get(&rule_key)?;
+
+        let rule_idx = if rule_name == "ANY" {
+            RuleKeys::Any as usize
+        } else {
+            let rule_key = format!("{}:{}", cat_name, rule_name);
+            *self.rule_map.get(&rule_key)?
+        };
         Some(RefInfo {
             cat_idx: cat_idx,
             rule_idx: rule_idx,
@@ -235,5 +237,32 @@ mod tests {
             str::from_utf8(&output[..]).unwrap(),
             "oogahhellothereboogah"
         );
+    }
+
+    #[test]
+    fn test_any_rule_name() {
+        let mut rules = RuleSet::new();
+        let rules = rules
+            .set_category("test")
+            .add_rule("rule", "rule1")
+            .add_rule("rule2", "rule2");
+        let mut rand = Rand::new(0xabcdef12345678);
+        rules.finalize();
+
+        let mut rule1 = 0;
+        let mut rule2 = 0;
+        for _ in 0..100 {
+            let mut output: Vec<u8> = Vec::new();
+            rules.build_rule_slow("test", "ANY", &mut output, &mut rand);
+
+            if str::from_utf8(&output[..]).unwrap() == "rule1" {
+                rule1 += 1;
+            } else {
+                rule2 += 1;
+            }
+        }
+
+        assert_eq!(rule1 > 0, true);
+        assert_eq!(rule2 > 0, true);
     }
 }
