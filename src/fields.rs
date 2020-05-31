@@ -4,7 +4,7 @@ use std::fmt;
 use std::str;
 
 use super::random::Rand;
-use super::rules::{RefFetcher, RefInfo, RuleKeys};
+use super::rules::RefFetcher;
 
 const SAFE_BUILD: bool = true;
 
@@ -80,7 +80,7 @@ impl<'a> Convertible for f64 {
 }
 
 pub struct ItemBuilder<'a> {
-    pub categories: &'a Vec<Vec<Vec<Item>>>,
+    pub rules: &'a Vec<Vec<Item>>,
 }
 
 impl<'a> ItemBuilder<'a> {
@@ -98,17 +98,8 @@ impl<'a> ItemBuilder<'a> {
     }
 
     #[inline]
-    pub fn fetch_rule(
-        &'a self,
-        cat_idx: usize,
-        mut rule_idx: usize,
-        rand: &mut Rand,
-    ) -> Option<&Item> {
-        let cat = self.categories.get(cat_idx)?;
-        if rule_idx == (RuleKeys::Any as usize) {
-            rule_idx = rand.rand_u64(0, cat.len() as u64) as usize;
-        }
-        let rules = cat.get(rule_idx)?;
+    pub fn fetch_rule(&'a self, rule_idx: usize, rand: &mut Rand) -> Option<&Item> {
+        let rules = self.rules.get(rule_idx)?;
         let rand_idx = rand.rand_u64(0, rules.len() as u64) as usize;
         let res = rules.get(rand_idx)?;
         Some(res)
@@ -302,9 +293,8 @@ macro_rules! or {
 // ----------------------------------------------------------------------------
 
 pub struct Ref {
-    pub ref_cat: String,
     pub ref_rule: String,
-    pub ref_info: Option<RefInfo>,
+    pub ref_idx: Option<usize>,
 }
 
 /// Converts `Ref` to an Item::Ref instance
@@ -316,48 +306,46 @@ impl Convertible for Ref {
 
 impl fmt::Display for Ref {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Ref<{}:{}>", self.ref_cat, self.ref_rule)
+        write!(f, "Ref<{}>", self.ref_rule)
     }
 }
 
 impl Ref {
-    pub fn new<T>(ref_cat: T, ref_rule: T) -> Ref
+    pub fn new<T>(ref_rule: T) -> Ref
     where
         T: Into<String>,
     {
         Ref {
-            ref_cat: ref_cat.into(),
             ref_rule: ref_rule.into(),
-            ref_info: None,
+            ref_idx: None,
         }
     }
 
     pub fn finalize(&mut self, ref_fetcher: &RefFetcher) {
-        if let None = self.ref_info {
-            self.ref_info = ref_fetcher.get_ref_info(&self.ref_cat, &self.ref_rule);
+        if let None = self.ref_idx {
+            self.ref_idx = ref_fetcher.get_ref_idx(&self.ref_rule);
         }
     }
 
     #[inline]
     pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
-        let (cat_idx, rule_idx) = match &self.ref_info {
-            None => panic!(format!(
+        if let None = self.ref_idx {
+            panic!(format!(
                 "{} was never resolved! Was finalize not called?",
                 self
-            )),
-            Some(v) => (v.cat_idx, v.rule_idx),
-        };
-        let rule_val = builder
-            .fetch_rule(cat_idx, rule_idx, rand)
-            .expect("Concrete reference no longer valid");
-        builder.build(&rule_val, output, rand);
+            ));
+        }
+        let rule = builder
+            .fetch_rule(self.ref_idx.unwrap(), rand)
+            .expect("Invalid");
+        builder.build(&rule, output, rand);
     }
 }
 
 #[macro_export]
 macro_rules! reff {
-    ($cat:expr, $ref:expr) => {
-        crate::fields::Ref::new($cat, $ref)
+    ($ref:expr) => {
+        crate::fields::Ref::new($ref)
     };
 }
 
@@ -550,18 +538,14 @@ mod tests {
             let since_the_epoch = start
                 .duration_since(UNIX_EPOCH)
                 .expect("Time went backwards");
-            let item_builder: ItemBuilder = ItemBuilder {
-                categories: &Vec::new(),
-            };
+            let item_builder: ItemBuilder = ItemBuilder { rules: &Vec::new() };
             let mut rand = Rand::new(since_the_epoch.as_secs());
             let mut tmp_vec: Vec<u8> = Vec::new();
             $item.build(&item_builder, &mut tmp_vec, &mut rand);
             str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
         }};
         (rand=$rand:expr, $item:expr) => {{
-            let item_builder: ItemBuilder = ItemBuilder {
-                categories: &Vec::new(),
-            };
+            let item_builder: ItemBuilder = ItemBuilder { rules: &Vec::new() };
             let mut tmp_vec: Vec<u8> = Vec::new();
             $item.build(&item_builder, &mut tmp_vec, &mut $rand);
             str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
