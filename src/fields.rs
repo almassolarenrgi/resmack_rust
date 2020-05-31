@@ -100,7 +100,7 @@ impl<'a> ItemBuilder<'a> {
     #[inline]
     pub fn fetch_rule(&'a self, rule_idx: usize, rand: &mut Rand) -> Option<&Item> {
         let rules = self.rules.get(rule_idx)?;
-        let rand_idx = rand.rand_u64(0, rules.len() as u64) as usize;
+        let rand_idx = (rand.next() as usize) % rules.len();
         let res = rules.get(rand_idx)?;
         Some(res)
     }
@@ -258,7 +258,7 @@ impl Or {
 
     #[inline]
     pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
-        let choice_idx = rand.rand_u64(0, self.choices.len() as u64);
+        let choice_idx = (rand.next() as usize) % self.choices.len();
         builder.build(
             self.choices
                 .get(choice_idx as usize)
@@ -356,8 +356,9 @@ macro_rules! reff {
 /// The Str struct will be able to create a random string in the range
 /// [min, max] using the specified charset
 pub struct Str {
-    min: u64,
-    max: u64,
+    min: usize,
+    max: usize,
+    diff: usize,
     charset: Vec<u8>,
 }
 
@@ -380,13 +381,14 @@ impl fmt::Display for Str {
 }
 
 impl Str {
-    pub fn new<T>(min: u64, max: u64, charset: T) -> Self
+    pub fn new<T>(min: usize, max: usize, charset: T) -> Self
     where
         T: Into<Vec<u8>>,
     {
         Str {
             min,
             max,
+            diff: max - min,
             charset: charset.into(),
         }
     }
@@ -395,10 +397,10 @@ impl Str {
 
     #[inline]
     pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
-        let len = rand.rand_u64(self.min, self.max) as usize;
+        let len = ((rand.next() as usize) % self.diff) + self.min;
         let mut res: Vec<u8> = vec![0; len];
         for idx in 0..len {
-            let rand_idx = rand.rand_u64(0, self.charset.len() as u64) as usize;
+            let rand_idx = (rand.next() as usize) % self.charset.len();
             res[idx] = self.charset[rand_idx];
         }
         builder.direct_build(&res, output);

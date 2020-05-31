@@ -1,3 +1,5 @@
+#![feature(test)]
+
 pub mod fields;
 pub mod random;
 pub mod rules;

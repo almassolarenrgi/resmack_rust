@@ -53,7 +53,7 @@ impl Rand {
     }
 
     #[inline]
-    fn next(&mut self) -> u64 {
+    pub fn next(&mut self) -> u64 {
         let s0 = self.seed[0];
         let mut s1 = self.seed[1];
         let result = s0.wrapping_mul(5).rotate_left(7).wrapping_mul(9);
