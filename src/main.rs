@@ -36,16 +36,19 @@ pub fn main() {
     let ref_idx = rules.get_ref_idx("TestRule2").expect("Should exist");
     let mut iters: usize = 0;
     let mut output: Vec<u8> = Vec::new();
+    let mut total_size: usize = 0;
 
     //while (time::Instant::now() - start).as_millis() < (total_seconds * 1000) {
     loop {
+        output.clear();
         rules.build_rule(ref_idx, &mut output, &mut rand);
+        total_size += output.len();
         iters += 1;
         if iters % 0xfffff == 0 {
             let end = time::Instant::now();
             println!(
                 "{} MiB/s, {} iters/s",
-                (output.len() as f64 / (1024.0 * 1024.0)) / (end - start).as_secs_f64(),
+                (total_size as f64 / (1024.0 * 1024.0)) / (end - start).as_secs_f64(),
                 (iters as f64 / (end - start).as_secs_f64()),
             );
         }

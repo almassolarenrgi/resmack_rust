@@ -126,9 +126,7 @@ impl<'a> ItemBuilder<'a> {
             let new_size = old_size + item.len();
 
             if new_size > output.capacity() {
-                {
-                    output.reserve(new_size - old_size);
-                }
+                output.reserve(new_size - old_size);
             }
 
             std::ptr::copy_nonoverlapping(

@@ -17,6 +17,47 @@ use rand::{Rng, SeedableRng};
 ///     assert_eq!(-5 <= res && res < 5, true);
 /// }
 /// ```
+
+pub struct RandFZero {
+    seed: usize,
+}
+
+impl RandFZero {
+    pub fn new(seed: u64) -> RandFZero {
+        RandFZero {
+            seed: seed as usize,
+        }
+    }
+
+    /// Generates a new value in the range `[min, max)`
+    #[inline]
+    pub fn rand_u64(&mut self, min: u64, max: u64) -> u64 {
+        let num = self.next() as u64;
+        let diff = max - min;
+        let res = num % diff;
+        res + min
+    }
+
+    /// Generates a new value in the range `[min, max)`
+    #[inline]
+    pub fn rand_i64(&mut self, min: i64, max: i64) -> i64 {
+        let num = self.next() as u64;
+        let diff: u64 = (max - min) as u64;
+        let res = num % diff;
+        (res as i64) + min
+    }
+
+    #[inline]
+    pub fn next(&mut self) -> usize {
+        let mut seed = self.seed;
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 43;
+        self.seed = seed;
+        seed
+    }
+}
+
 pub struct Rand {
     seed: [u64; 2],
 }
