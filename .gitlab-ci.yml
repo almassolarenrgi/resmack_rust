@@ -12,4 +12,5 @@ test:
 bench_run:
   stage: bench
   script:
-    - cargo run --release
+    - cargo build --release
+    - (cargo run --release & PID=$! ; sleep 10 ; kill "$PID") || true

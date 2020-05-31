@@ -32,11 +32,11 @@ pub fn main() {
         .add_rule("TestRule2", "---World");
     rules.finalize();
 
-    let start = time::Instant::now();
     let ref_idx = rules.get_ref_idx("TestRule2").expect("Should exist");
     let mut iters: usize = 0;
     let mut output: Vec<u8> = Vec::new();
     let mut total_size: usize = 0;
+    let start = time::Instant::now();
 
     //while (time::Instant::now() - start).as_millis() < (total_seconds * 1000) {
     loop {
