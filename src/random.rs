@@ -3,6 +3,9 @@ extern crate rand;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
+pub type Rand = RandXoshiro128StarStar;
+//pub type Rand = RandFZero;
+
 /// The rand struct exposes the `rand_int` function for number generation.
 ///
 /// ```
@@ -18,56 +21,16 @@ use rand::{Rng, SeedableRng};
 /// }
 /// ```
 
-pub struct RandFZero {
-    seed: usize,
-}
-
-impl RandFZero {
-    pub fn new(seed: u64) -> RandFZero {
-        RandFZero {
-            seed: seed as usize,
-        }
-    }
-
-    /// Generates a new value in the range `[min, max)`
-    #[inline]
-    pub fn rand_u64(&mut self, min: u64, max: u64) -> u64 {
-        let num = self.next() as u64;
-        let diff = max - min;
-        let res = num % diff;
-        res + min
-    }
-
-    /// Generates a new value in the range `[min, max)`
-    #[inline]
-    pub fn rand_i64(&mut self, min: i64, max: i64) -> i64 {
-        let num = self.next() as u64;
-        let diff: u64 = (max - min) as u64;
-        let res = num % diff;
-        (res as i64) + min
-    }
-
-    #[inline]
-    pub fn next(&mut self) -> usize {
-        let mut seed = self.seed;
-        seed ^= seed << 13;
-        seed ^= seed >> 17;
-        seed ^= seed << 43;
-        self.seed = seed;
-        seed
-    }
-}
-
-pub struct Rand {
+pub struct RandXoshiro128StarStar {
     seed: [u64; 2],
 }
 
-impl Rand {
-    pub fn new(seed: u64) -> Rand {
+impl RandXoshiro128StarStar {
+    pub fn new(seed: u64) -> RandXoshiro128StarStar {
         let mut rng: StdRng = SeedableRng::seed_from_u64(seed);
         let seed: u128 = rng.gen();
 
-        Rand {
+        RandXoshiro128StarStar {
             seed: [
                 (seed & ((1 << 64) - 1)) as u64,
                 ((seed >> 64) & ((1 << 64) - 1)) as u64,

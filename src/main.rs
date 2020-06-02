@@ -8,7 +8,7 @@ use crate::rules::*;
 use std::time;
 
 pub fn main() {
-    let mut rand = Rand::new(0);
+    let mut rand = Rand::new(1337);
     let mut rules = RuleSet::new();
     let rules = rules
         .add_rule("Special", "SPECIAL ONE")
