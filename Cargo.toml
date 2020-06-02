@@ -9,6 +9,18 @@ edition = "2018"
 [dependencies]
 rand = "*"
 
+[dev-dependencies]
+criterion = "0.3"
+rand_xorshift = "*"
+rand_chacha = "*"
+rand_pcg = "*"
+rand_isaac = "*"
+rand_hc = "*"
+
+[[bench]]
+name = "prngs"
+harness = false
+
 [profile.dev]
 opt-level = 0
 
