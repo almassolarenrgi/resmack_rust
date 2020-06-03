@@ -187,10 +187,12 @@ impl And {
         self
     }
 
-    pub fn finalize(&mut self, fetcher: &RefFetcher) {
+    pub fn finalize(&mut self, fetcher: &RefFetcher) -> bool {
+        let mut res = true;
         for item in self.items.iter_mut() {
-            fetcher.finalize(item);
+            res &= fetcher.finalize(item);
         }
+        res
     }
 
     #[inline]
@@ -266,10 +268,19 @@ impl Or {
         );
     }
 
-    pub fn finalize(&mut self, fetcher: &RefFetcher) {
-        for choice in self.choices.iter_mut() {
-            fetcher.finalize(choice);
+    pub fn finalize(&mut self, fetcher: &RefFetcher) -> bool {
+        let mut to_prune: Vec<usize> = Vec::new();
+        for (choice_idx, choice) in self.choices.iter_mut().enumerate() {
+            if !fetcher.finalize(choice) {
+                to_prune.push(choice_idx);
+            }
         }
+
+        // remove from the end of the list first!
+        to_prune.iter().rev().map(|idx| self.choices.remove(*idx));
+
+        // only prune this if we pruned all of our choices first
+        self.choices.len() > 0
     }
 
     pub fn add_item<T: Convertible>(mut self, choice: T) -> Self {
@@ -319,10 +330,9 @@ impl Ref {
         }
     }
 
-    pub fn finalize(&mut self, ref_fetcher: &RefFetcher) {
-        if let None = self.ref_idx {
-            self.ref_idx = ref_fetcher.get_ref_idx(&self.ref_rule);
-        }
+    pub fn finalize(&mut self, ref_fetcher: &RefFetcher) -> bool {
+        self.ref_idx = ref_fetcher.get_ref_idx(&self.ref_rule);
+        self.ref_idx.is_some()
     }
 
     #[inline]
@@ -500,8 +510,8 @@ impl Opt {
         }
     }
 
-    pub fn finalize(&mut self, fetcher: &RefFetcher) {
-        fetcher.finalize(&mut self.item);
+    pub fn finalize(&mut self, fetcher: &RefFetcher) -> bool {
+        fetcher.finalize(&mut self.item)
     }
 
     #[inline]

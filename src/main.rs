@@ -11,6 +11,8 @@ pub fn main() {
     let mut rand = Rand::new(1337);
     let mut rules = RuleSet::new();
     let rules = rules
+        .add_rule("PruneMe", reff!("unresolvable"))
+        .add_rule("PruneMeToo", reff!("PruneMe"))
         .add_rule("Special", "SPECIAL ONE")
         .add_rule("RefdRule", or!("Hello", "Blah", reff!("Special")))
         .add_rule("TestRule", and!(reff!("RefdRule"), "World"))

@@ -7,6 +7,7 @@ use super::random::Rand;
 
 pub struct RuleSet {
     pub rule_map: BTreeMap<String, usize>,
+    pub rule_map_inv: BTreeMap<usize, String>,
     pub rules: Vec<Vec<Item>>,
 }
 
@@ -14,6 +15,7 @@ impl RuleSet {
     pub fn new() -> RuleSet {
         RuleSet {
             rule_map: BTreeMap::new(),
+            rule_map_inv: BTreeMap::new(),
             rules: Vec::new(),
         }
     }
@@ -28,7 +30,8 @@ impl RuleSet {
         let rule_idx = match self.rule_map.get(&rule_name) {
             None => {
                 let res = self.rules.len();
-                self.rule_map.insert(rule_name, res);
+                self.rule_map.insert(rule_name.clone(), res);
+                self.rule_map_inv.insert(res, rule_name);
                 self.rules.push(Vec::new());
                 res
             }
@@ -40,14 +43,42 @@ impl RuleSet {
     }
 
     pub fn finalize(&mut self) {
-        let fetcher = RefFetcher {
-            rule_map: &self.rule_map,
-        };
+        let mut to_prune: Vec<(usize, usize)> = Vec::new();
+        loop {
+            {
+                let fetcher = RefFetcher {
+                    rule_map: &self.rule_map,
+                };
 
-        for rule_list in self.rules.iter_mut() {
-            for rule_opt in rule_list.iter_mut() {
-                fetcher.finalize(rule_opt);
+                for (rule_idx, rule_list) in self.rules.iter_mut().enumerate() {
+                    for (opt_idx, rule_opt) in rule_list.iter_mut().enumerate() {
+                        if !fetcher.finalize(rule_opt) {
+                            println!(
+                                "Could not finalize {}[{}]: {}",
+                                self.rule_map_inv[&rule_idx], opt_idx, rule_opt,
+                            );
+                            to_prune.push((rule_idx, opt_idx));
+                        }
+                    }
+                }
             }
+
+            if to_prune.len() == 0 {
+                break;
+            }
+
+            // iterate backwards so we remove items from the end of vecs first
+            for (rule_idx, opt_idx) in to_prune.iter().rev() {
+                self.rules[*rule_idx].remove(*opt_idx);
+                // keep the list, but remove it from the rule_map to make
+                // referencing refs fail
+                if self.rules[*rule_idx].len() == 0 {
+                    self.rule_map
+                        .remove(self.rule_map_inv.get(rule_idx).unwrap());
+                }
+            }
+
+            to_prune.clear();
         }
     }
 
@@ -98,14 +129,17 @@ pub struct RefFetcher<'a> {
 }
 
 impl<'a> RefFetcher<'a> {
-    pub fn finalize(&self, item: &mut Item) {
+    /// Finalize the `Item`, returning true if the item is fully resolvable
+    pub fn finalize(&self, item: &mut Item) -> bool {
         match item {
             Item::And(v) => v.finalize(&self),
             Item::Ref(v) => v.finalize(&self),
             Item::Or(v) => v.finalize(&self),
             Item::Opt(v) => v.finalize(&self),
-            _ => (),
-        };
+            Item::Direct(_) => true,
+            Item::Str(_) => true,
+            Item::Int(_) => true,
+        }
     }
 
     pub fn get_ref_idx<T>(&'a self, rule_name: T) -> Option<usize>
@@ -152,5 +186,24 @@ mod tests {
             str::from_utf8(&output[..]).unwrap(),
             "oogahhellothereboogah"
         );
+    }
+
+    #[test]
+    fn test_auto_prune() {
+        let mut rules = RuleSet::new();
+        let rules = rules
+            .add_rule("prune_me", reff!("unresolvable"))
+            .add_rule("prune_me2", reff!("prune_me"))
+            .add_rule("prune_me3", reff!("prune_me2"))
+            .add_rule("rule", "a valid rule")
+            .add_rule("rule2", and!("oogah", reff!("rule"), "boogah"));
+        rules.finalize();
+
+        assert_eq!(rules.rule_map.len(), 2);
+        assert_eq!(rules.rule_map.contains_key("rule"), true);
+        assert_eq!(rules.rule_map.contains_key("rule2"), true);
+        assert_eq!(rules.rule_map.contains_key("prune_me"), false);
+        assert_eq!(rules.rule_map.contains_key("prune_me2"), false);
+        assert_eq!(rules.rule_map.contains_key("prune_me3"), false);
     }
 }
