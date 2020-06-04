@@ -97,8 +97,8 @@ impl<'a> ItemBuilder<'a> {
                 self.curr_depth.set(self.curr_depth.get() + 1);
                 v.build(self, output, rand)
             }
-            Item::Or(v) => v.build(self, output, rand, self.curr_depth.get() > self.max_depth),
-            Item::Opt(v) => v.build(self, output, rand),
+            Item::Or(v) => v.build(self, output, rand, self.curr_depth.get() >= self.max_depth),
+            Item::Opt(v) => v.build(self, output, rand, self.curr_depth.get() >= self.max_depth),
             Item::Str(v) => v.build(self, output, rand),
             Item::Int(v) => v.build(self, output, rand),
         }
@@ -204,13 +204,20 @@ impl And {
 
     pub fn calc_ref_length(&mut self, length_calc: &RefLenCalculator) -> usize {
         let mut max_ref_length: usize = 0;
+        let mut all_resolved = true;
         for item in self.items.iter_mut() {
             let ref_len = length_calc.calc_ref_length(item);
-            if ref_len > max_ref_length {
+            if ref_len == 0 {
+                all_resolved = false;
+            } else if ref_len > max_ref_length {
                 max_ref_length = ref_len;
             }
         }
-        max_ref_length
+        if all_resolved {
+            max_ref_length
+        } else {
+            0
+        }
     }
 
     #[inline]
@@ -550,6 +557,7 @@ macro_rules! int {
 /// [min, max]
 pub struct Opt {
     item: Box<Item>,
+    has_refs: bool,
 }
 
 impl Convertible for Opt {
@@ -568,6 +576,7 @@ impl Opt {
     pub fn new<T: Convertible>(item: T) -> Self {
         Opt {
             item: Box::new(item.convert()),
+            has_refs: false,
         }
     }
 
@@ -576,12 +585,29 @@ impl Opt {
     }
 
     #[inline]
-    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
+    pub fn build(
+        &self,
+        builder: &ItemBuilder,
+        output: &mut Vec<u8>,
+        rand: &mut Rand,
+        shortest: bool,
+    ) {
+        if shortest && self.has_refs {
+            return;
+        }
         let rand_val = rand.rand_u64(0, 2);
         if rand_val == 0 {
             return;
         }
         builder.build(&self.item, output, rand);
+    }
+
+    pub fn calc_ref_length(&mut self, length_calc: &RefLenCalculator) -> usize {
+        let res = length_calc.calc_ref_length(&mut self.item);
+        if res > 1 {
+            self.has_refs = true;
+        }
+        res
     }
 }
 

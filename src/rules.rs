@@ -159,14 +159,19 @@ impl RuleSet {
     }
 
     #[allow(dead_code)]
-    pub fn build_rule_slow<'a, T>(&'a self, rule_name: T, output: &mut Vec<u8>, rand: &mut Rand)
-    where
+    pub fn build_rule_slow<'a, T>(
+        &'a self,
+        rule_name: T,
+        output: &mut Vec<u8>,
+        rand: &mut Rand,
+        max_recursion: usize,
+    ) where
         T: Into<String>,
     {
         let builder = ItemBuilder {
             rules: &self.rules,
             curr_depth: Cell::new(0),
-            max_depth: 10,
+            max_depth: max_recursion,
         };
 
         let rule = self
@@ -186,6 +191,7 @@ impl<'a> RefLenCalculator<'a> {
             Item::And(v) => v.calc_ref_length(self),
             Item::Or(v) => v.calc_ref_length(self),
             Item::Ref(v) => v.calc_ref_length(self),
+            Item::Opt(v) => v.calc_ref_length(self),
             _ => 1,
         }
     }
@@ -255,7 +261,7 @@ mod tests {
         rules.finalize();
 
         let mut output: Vec<u8> = Vec::new();
-        rules.build_rule_slow("rule2", &mut output, &mut rand);
+        rules.build_rule_slow("rule2", &mut output, &mut rand, 10);
         assert_eq!(
             str::from_utf8(&output[..]).unwrap(),
             "oogahhellothereboogah"
@@ -285,16 +291,81 @@ mod tests {
     fn test_ref_length() {
         let mut rules = RuleSet::new();
         let rules = rules
-            .add_rule("rule", reff!("rule1"))
-            .add_rule("rule1", or!("resolved", reff!("rule2")))
-            .add_rule("rule2", or!("resolved", reff!("rule1")));
+            .add_rule("rule", and!("rule", reff!("rule1")))
+            .add_rule("rule1", and!("rule1", or!("short", reff!("rule2"))))
+            .add_rule("rule2", and!("rule2", or!("short", reff!("rule3"))))
+            .add_rule("rule3", and!("rule3", or!("short", reff!("rule1"))));
         rules.finalize();
 
         let get_rule_len = |name| rules.rules[rules.rule_map[name]][0].1;
 
-        assert_eq!(rules.rule_map.len(), 3);
+        assert_eq!(rules.rule_map.len(), 4);
         assert_eq!(get_rule_len("rule"), 2);
         assert_eq!(get_rule_len("rule1"), 1);
         assert_eq!(get_rule_len("rule2"), 1);
+        assert_eq!(get_rule_len("rule3"), 1);
+
+        let ref_idx = rules.get_ref_idx("rule").unwrap();
+        let mut rand = Rand::new(11111);
+
+        let mut max_recursion = 1;
+        for _ in 0..100 {
+            let mut output: Vec<u8> = Vec::new();
+            rules.build_rule(ref_idx, &mut output, &mut rand, max_recursion);
+            let res = std::str::from_utf8(&output).unwrap();
+            assert_ne!(res, "rulerule");
+        }
+
+        max_recursion = 1;
+        for _ in 0..100 {
+            let mut output: Vec<u8> = Vec::new();
+            rules.build_rule(ref_idx, &mut output, &mut rand, max_recursion);
+            let res = std::str::from_utf8(&output).unwrap();
+            assert_eq!(["rulerule1short"].contains(&res), true);
+        }
+
+        max_recursion = 2;
+        for _ in 0..100 {
+            let mut output: Vec<u8> = Vec::new();
+            rules.build_rule(ref_idx, &mut output, &mut rand, max_recursion);
+            let res = std::str::from_utf8(&output).unwrap();
+            assert_eq!(
+                ["rulerule1short", "rulerule1rule2short"].contains(&res),
+                true
+            );
+        }
+
+        max_recursion = 3;
+        for _ in 0..100 {
+            let mut output: Vec<u8> = Vec::new();
+            rules.build_rule(ref_idx, &mut output, &mut rand, max_recursion);
+            let res = std::str::from_utf8(&output).unwrap();
+            assert_eq!(
+                [
+                    "rulerule1short",
+                    "rulerule1rule2short",
+                    "rulerule1rule2rule3short"
+                ]
+                .contains(&res),
+                true
+            );
+        }
+
+        max_recursion = 4;
+        for _ in 0..100 {
+            let mut output: Vec<u8> = Vec::new();
+            rules.build_rule(ref_idx, &mut output, &mut rand, max_recursion);
+            let res = std::str::from_utf8(&output).unwrap();
+            assert_eq!(
+                [
+                    "rulerule1short",
+                    "rulerule1rule2short",
+                    "rulerule1rule2rule3short",
+                    "rulerule1rule2rule3rule1short"
+                ]
+                .contains(&res),
+                true
+            );
+        }
     }
 }
