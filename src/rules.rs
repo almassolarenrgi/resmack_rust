@@ -9,7 +9,7 @@ use super::random::Rand;
 pub struct RuleSet {
     pub rule_map: BTreeMap<String, usize>,
     pub rule_map_inv: BTreeMap<usize, String>,
-    pub rules: Vec<Vec<Item>>,
+    pub rules: Vec<Vec<(Item, usize)>>,
 }
 
 impl RuleSet {
@@ -46,20 +46,18 @@ impl RuleSet {
     pub fn finalize(&mut self) {
         let mut to_prune: Vec<(usize, usize)> = Vec::new();
         loop {
-            {
-                let fetcher = RefFetcher {
-                    rule_map: &self.rule_map,
-                };
+            let fetcher = RefFetcher {
+                rule_map: &self.rule_map,
+            };
 
-                for (rule_idx, rule_list) in self.rules.iter_mut().enumerate() {
-                    for (opt_idx, rule_opt) in rule_list.iter_mut().enumerate() {
-                        if !fetcher.finalize(rule_opt) {
-                            println!(
-                                "Could not finalize {}[{}]: {}",
-                                self.rule_map_inv[&rule_idx], opt_idx, rule_opt,
-                            );
-                            to_prune.push((rule_idx, opt_idx));
-                        }
+            for (rule_idx, rule_list) in self.rules.iter_mut().enumerate() {
+                for (opt_idx, rule_opt) in rule_list.iter_mut().enumerate() {
+                    if !fetcher.finalize(rule_opt) {
+                        println!(
+                            "Could not finalize {}[{}]: {}",
+                            self.rule_map_inv[&rule_idx], opt_idx, rule_opt,
+                        );
+                        to_prune.push((rule_idx, opt_idx));
                     }
                 }
             }
@@ -81,7 +79,11 @@ impl RuleSet {
 
             to_prune.clear();
         }
+
+        self.calc_shortest_ref_length();
     }
+
+    fn calc_shortest_ref_length(&mut self) {}
 
     pub fn get_ref_idx<T>(&self, rule_name: T) -> Option<usize>
     where

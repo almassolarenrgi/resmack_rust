@@ -81,7 +81,7 @@ impl<'a> Convertible for f64 {
 }
 
 pub struct ItemBuilder<'a> {
-    pub rules: &'a Vec<Vec<Item>>,
+    pub rules: &'a Vec<Vec<(Item, usize)>>,
     pub curr_depth: std::cell::Cell<usize>,
     pub max_depth: usize,
 }
@@ -107,7 +107,7 @@ impl<'a> ItemBuilder<'a> {
     pub fn fetch_rule(&'a self, rule_idx: usize, rand: &mut Rand) -> Option<&Item> {
         let rules = self.rules.get(rule_idx)?;
         let rand_idx = (rand.next() as usize) % rules.len();
-        let res = rules.get(rand_idx)?;
+        let (res, _) = rules.get(rand_idx)?;
         Some(res)
     }
 
@@ -295,7 +295,9 @@ impl Or {
         }
 
         // remove from the end of the list first!
-        to_prune.iter().rev().map(|idx| self.choices.remove(*idx));
+        for idx in to_prune.iter().rev() {
+            self.choices.remove(*idx);
+        }
 
         // only prune this if we pruned all of our choices first
         self.choices.len() > 0
