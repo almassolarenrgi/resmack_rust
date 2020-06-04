@@ -1,10 +1,12 @@
 #![macro_use]
 
+use std::cell::Cell;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::str;
 
 use super::random::Rand;
-use super::rules::RefFetcher;
+use super::rules::{RefFetcher, RefLenCalculator};
 
 const SAFE_BUILD: bool = true;
 
@@ -80,7 +82,9 @@ impl<'a> Convertible for f64 {
 }
 
 pub struct ItemBuilder<'a> {
-    pub rules: &'a Vec<Vec<Item>>,
+    pub rules: &'a Vec<Vec<(Item, usize)>>,
+    pub curr_depth: std::cell::Cell<usize>,
+    pub max_depth: usize,
 }
 
 impl<'a> ItemBuilder<'a> {
@@ -89,9 +93,12 @@ impl<'a> ItemBuilder<'a> {
         match item {
             Item::Direct(v) => self.direct_build(v, output),
             Item::And(v) => v.build(self, output, rand),
-            Item::Ref(v) => v.build(self, output, rand),
-            Item::Or(v) => v.build(self, output, rand),
-            Item::Opt(v) => v.build(self, output, rand),
+            Item::Ref(v) => {
+                self.curr_depth.set(self.curr_depth.get() + 1);
+                v.build(self, output, rand)
+            }
+            Item::Or(v) => v.build(self, output, rand, self.curr_depth.get() >= self.max_depth),
+            Item::Opt(v) => v.build(self, output, rand, self.curr_depth.get() >= self.max_depth),
             Item::Str(v) => v.build(self, output, rand),
             Item::Int(v) => v.build(self, output, rand),
         }
@@ -101,7 +108,7 @@ impl<'a> ItemBuilder<'a> {
     pub fn fetch_rule(&'a self, rule_idx: usize, rand: &mut Rand) -> Option<&Item> {
         let rules = self.rules.get(rule_idx)?;
         let rand_idx = (rand.next() as usize) % rules.len();
-        let res = rules.get(rand_idx)?;
+        let (res, _) = rules.get(rand_idx)?;
         Some(res)
     }
 
@@ -195,6 +202,24 @@ impl And {
         res
     }
 
+    pub fn calc_ref_length(&mut self, length_calc: &RefLenCalculator) -> usize {
+        let mut max_ref_length: usize = 0;
+        let mut all_resolved = true;
+        for item in self.items.iter_mut() {
+            let ref_len = length_calc.calc_ref_length(item);
+            if ref_len == 0 {
+                all_resolved = false;
+            } else if ref_len > max_ref_length {
+                max_ref_length = ref_len;
+            }
+        }
+        if all_resolved {
+            max_ref_length
+        } else {
+            0
+        }
+    }
+
     #[inline]
     pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
         let mut idx = 0;
@@ -226,6 +251,7 @@ macro_rules! and {
 
 pub struct Or {
     pub choices: Vec<Item>,
+    pub shortest_options: Vec<usize>,
 }
 
 /// Converts `Or` to an Item::Or instance
@@ -253,12 +279,23 @@ impl Or {
     pub fn new() -> Or {
         Or {
             choices: Vec::new(),
+            shortest_options: Vec::new(),
         }
     }
 
     #[inline]
-    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
-        let choice_idx = (rand.next() as usize) % self.choices.len();
+    pub fn build(
+        &self,
+        builder: &ItemBuilder,
+        output: &mut Vec<u8>,
+        rand: &mut Rand,
+        shortest: bool,
+    ) {
+        let choice_idx = if shortest {
+            self.shortest_options[(rand.next() as usize) % self.shortest_options.len()]
+        } else {
+            (rand.next() as usize) % self.choices.len()
+        };
         builder.build(
             self.choices
                 .get(choice_idx as usize)
@@ -277,10 +314,33 @@ impl Or {
         }
 
         // remove from the end of the list first!
-        to_prune.iter().rev().map(|idx| self.choices.remove(*idx));
+        for idx in to_prune.iter().rev() {
+            self.choices.remove(*idx);
+        }
 
         // only prune this if we pruned all of our choices first
         self.choices.len() > 0
+    }
+
+    pub fn calc_ref_length(&mut self, length_calc: &RefLenCalculator) -> usize {
+        let mut min_ref_length: usize = 0xffffffff;
+        let mut ref_lengths: BTreeMap<usize, usize> = BTreeMap::new();
+
+        for (item_idx, item) in self.choices.iter_mut().enumerate() {
+            let ref_len = length_calc.calc_ref_length(item);
+            ref_lengths.insert(item_idx, ref_len);
+            if ref_len < min_ref_length && ref_len != 0 {
+                min_ref_length = ref_len;
+            }
+        }
+
+        for (item_idx, item_len) in ref_lengths.iter() {
+            if *item_len == min_ref_length {
+                self.shortest_options.push(*item_idx);
+            }
+        }
+
+        min_ref_length
     }
 
     pub fn add_item<T: Convertible>(mut self, choice: T) -> Self {
@@ -333,6 +393,14 @@ impl Ref {
     pub fn finalize(&mut self, ref_fetcher: &RefFetcher) -> bool {
         self.ref_idx = ref_fetcher.get_ref_idx(&self.ref_rule);
         self.ref_idx.is_some()
+    }
+
+    pub fn calc_ref_length(&mut self, length_calc: &RefLenCalculator) -> usize {
+        let refd_len = match length_calc.get_ref_len(self.ref_idx.unwrap()) {
+            Some(v) => v,
+            None => return 0,
+        };
+        refd_len + 1
     }
 
     #[inline]
@@ -489,6 +557,7 @@ macro_rules! int {
 /// [min, max]
 pub struct Opt {
     item: Box<Item>,
+    has_refs: bool,
 }
 
 impl Convertible for Opt {
@@ -507,6 +576,7 @@ impl Opt {
     pub fn new<T: Convertible>(item: T) -> Self {
         Opt {
             item: Box::new(item.convert()),
+            has_refs: false,
         }
     }
 
@@ -515,12 +585,29 @@ impl Opt {
     }
 
     #[inline]
-    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
+    pub fn build(
+        &self,
+        builder: &ItemBuilder,
+        output: &mut Vec<u8>,
+        rand: &mut Rand,
+        shortest: bool,
+    ) {
+        if shortest && self.has_refs {
+            return;
+        }
         let rand_val = rand.rand_u64(0, 2);
         if rand_val == 0 {
             return;
         }
         builder.build(&self.item, output, rand);
+    }
+
+    pub fn calc_ref_length(&mut self, length_calc: &RefLenCalculator) -> usize {
+        let res = length_calc.calc_ref_length(&mut self.item);
+        if res > 1 {
+            self.has_refs = true;
+        }
+        res
     }
 }
 
@@ -548,16 +635,24 @@ mod tests {
             let since_the_epoch = start
                 .duration_since(UNIX_EPOCH)
                 .expect("Time went backwards");
-            let item_builder: ItemBuilder = ItemBuilder { rules: &Vec::new() };
+            let item_builder: ItemBuilder = ItemBuilder {
+                rules: &Vec::new(),
+                curr_depth: Cell::new(0),
+                max_depth: 10,
+            };
             let mut rand = Rand::new(since_the_epoch.as_secs());
             let mut tmp_vec: Vec<u8> = Vec::new();
-            $item.build(&item_builder, &mut tmp_vec, &mut rand);
+            item_builder.build(&$item.convert(), &mut tmp_vec, &mut rand);
             str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
         }};
         (rand=$rand:expr, $item:expr) => {{
-            let item_builder: ItemBuilder = ItemBuilder { rules: &Vec::new() };
+            let item_builder: ItemBuilder = ItemBuilder {
+                rules: &Vec::new(),
+                curr_depth: Cell::new(0),
+                max_depth: 10,
+            };
             let mut tmp_vec: Vec<u8> = Vec::new();
-            $item.build(&item_builder, &mut tmp_vec, &mut $rand);
+            item_builder.build(&$item.convert(), &mut tmp_vec, &mut $rand);
             str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
         }};
     }
@@ -637,8 +732,8 @@ mod tests {
     #[test]
     fn test_str_full_macro() {
         let charset = "hello";
-        let val = string!(min = 1, max = 5, charset = charset);
         for _ in 0..100 {
+            let val = string!(min = 1, max = 5, charset = charset);
             let res = build!(val);
             assert_eq!(res.chars().all(|x| charset.contains(x)), true);
         }
@@ -647,8 +742,8 @@ mod tests {
     #[test]
     fn test_str_max_charset_macro() {
         let charset = "hello";
-        let val = string!(max = 5, charset = charset);
         for _ in 0..100 {
+            let val = string!(max = 5, charset = charset);
             let res = build!(val);
             assert_eq!(res.chars().all(|x| charset.contains(x)), true);
         }
@@ -657,8 +752,8 @@ mod tests {
     #[test]
     fn test_str_charset_macro() {
         let charset = "hello";
-        let val = string!(charset);
         for _ in 0..100 {
+            let val = string!(charset);
             let res = build!(val);
             assert_eq!(res.chars().all(|x| charset.contains(x)), true);
         }
@@ -667,8 +762,8 @@ mod tests {
     #[test]
     fn test_str_default_macro() {
         let charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-        let val = string!();
         for _ in 0..100 {
+            let val = string!();
             let res = build!(val);
             assert_eq!(res.chars().all(|x| charset.contains(x)), true);
         }
@@ -678,8 +773,8 @@ mod tests {
     fn test_int_full_macro() {
         let choices = [3, 4, 5, 6];
         let choices: Vec<String> = choices.iter().map(|x| x.to_string()).collect();
-        let val = int!(min = 3, max = 7);
         for _ in 0..100 {
+            let val = int!(min = 3, max = 7);
             let res = build!(val);
             assert_eq!(choices.contains(&res), true);
         }
@@ -689,8 +784,8 @@ mod tests {
     fn test_int_max_macro() {
         let choices = [0, 1, 2, 3, 4, 5, 6];
         let choices: Vec<String> = choices.iter().map(|x| x.to_string()).collect();
-        let val = int!(max = 7);
         for _ in 0..100 {
+            let val = int!(max = 7);
             let res = build!(val);
             assert_eq!(choices.contains(&res), true);
         }
@@ -699,8 +794,8 @@ mod tests {
     #[test]
     fn test_int_default_macro() {
         let choices: Vec<String> = (0..1001).map(|x| x.to_string()).collect();
-        let val = int!();
         for _ in 0..1000 {
+            let val = int!();
             let res = build!(val);
             assert_eq!(choices.contains(&res), true);
         }
@@ -709,12 +804,12 @@ mod tests {
     #[test]
     fn test_opt() {
         let mut build_count = 0;
-        let val = opt!("a");
         let iters = 100;
 
         let mut rand = Rand::new(100);
 
         for _ in 0..iters {
+            let val = opt!("a");
             let res = build!(rand = rand, val);
             build_count += res.len();
         }
