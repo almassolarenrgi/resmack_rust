@@ -44,6 +44,12 @@ impl RuleSet {
     }
 
     pub fn finalize(&mut self) {
+        self.finalize_and_prune_rules();
+        self.calc_shortest_ref_length();
+    }
+
+    pub fn finalize_and_prune_rules(&mut self) {
+        println!("Finalizing and pruning rules");
         let mut to_prune: Vec<(usize, usize)> = Vec::new();
         loop {
             let fetcher = RefFetcher {
@@ -54,7 +60,7 @@ impl RuleSet {
                 for (opt_idx, (rule_opt, _)) in rule_list.iter_mut().enumerate() {
                     if !fetcher.finalize(rule_opt) {
                         println!(
-                            "Could not finalize {}[{}]: {}",
+                            "Pruning {}[{}]: {}",
                             self.rule_map_inv[&rule_idx], opt_idx, rule_opt,
                         );
                         to_prune.push((rule_idx, opt_idx));
@@ -79,11 +85,10 @@ impl RuleSet {
 
             to_prune.clear();
         }
-
-        self.calc_shortest_ref_length();
     }
 
     pub fn calc_shortest_ref_length(&mut self) {
+        println!("Calculating shortest ref lengths");
         let mut rule_lengths: BTreeMap<usize, usize> = BTreeMap::new();
 
         loop {
@@ -101,7 +106,9 @@ impl RuleSet {
 
                     if *opt_ref_len == 0 {
                         *opt_ref_len = length_calc.calc_ref_length(rule_opt);
-                        num_resolved += 1;
+                        if *opt_ref_len != 0 {
+                            num_resolved += 1;
+                        }
                     }
                     if *opt_ref_len < min_ref_len {
                         min_ref_len = *opt_ref_len;
@@ -111,7 +118,7 @@ impl RuleSet {
                     rule_lengths.insert(rule_idx, min_ref_len);
                 }
             }
-            // there was nothing new to resolve
+            // there was nothing new that was resolved
             if num_resolved == 0 {
                 break;
             }
