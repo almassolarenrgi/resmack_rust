@@ -1,5 +1,6 @@
 #![macro_use]
 
+use std::cell::Cell;
 use std::fmt;
 use std::str;
 
@@ -81,6 +82,8 @@ impl<'a> Convertible for f64 {
 
 pub struct ItemBuilder<'a> {
     pub rules: &'a Vec<Vec<Item>>,
+    pub curr_depth: std::cell::Cell<usize>,
+    pub max_depth: usize,
 }
 
 impl<'a> ItemBuilder<'a> {
@@ -89,8 +92,11 @@ impl<'a> ItemBuilder<'a> {
         match item {
             Item::Direct(v) => self.direct_build(v, output),
             Item::And(v) => v.build(self, output, rand),
-            Item::Ref(v) => v.build(self, output, rand),
-            Item::Or(v) => v.build(self, output, rand),
+            Item::Ref(v) => {
+                self.curr_depth.set(self.curr_depth.get() + 1);
+                v.build(self, output, rand)
+            }
+            Item::Or(v) => v.build(self, output, rand, self.curr_depth.get() > self.max_depth),
             Item::Opt(v) => v.build(self, output, rand),
             Item::Str(v) => v.build(self, output, rand),
             Item::Int(v) => v.build(self, output, rand),
@@ -226,6 +232,7 @@ macro_rules! and {
 
 pub struct Or {
     pub choices: Vec<Item>,
+    pub shortest_option: usize,
 }
 
 /// Converts `Or` to an Item::Or instance
@@ -253,12 +260,23 @@ impl Or {
     pub fn new() -> Or {
         Or {
             choices: Vec::new(),
+            shortest_option: 0,
         }
     }
 
     #[inline]
-    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
-        let choice_idx = (rand.next() as usize) % self.choices.len();
+    pub fn build(
+        &self,
+        builder: &ItemBuilder,
+        output: &mut Vec<u8>,
+        rand: &mut Rand,
+        shortest: bool,
+    ) {
+        let choice_idx = if shortest {
+            self.shortest_option
+        } else {
+            (rand.next() as usize) % self.choices.len()
+        };
         builder.build(
             self.choices
                 .get(choice_idx as usize)
@@ -548,16 +566,24 @@ mod tests {
             let since_the_epoch = start
                 .duration_since(UNIX_EPOCH)
                 .expect("Time went backwards");
-            let item_builder: ItemBuilder = ItemBuilder { rules: &Vec::new() };
+            let item_builder: ItemBuilder = ItemBuilder {
+                rules: &Vec::new(),
+                curr_depth: Cell::new(0),
+                max_depth: 10,
+            };
             let mut rand = Rand::new(since_the_epoch.as_secs());
             let mut tmp_vec: Vec<u8> = Vec::new();
-            $item.build(&item_builder, &mut tmp_vec, &mut rand);
+            item_builder.build(&$item.convert(), &mut tmp_vec, &mut rand);
             str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
         }};
         (rand=$rand:expr, $item:expr) => {{
-            let item_builder: ItemBuilder = ItemBuilder { rules: &Vec::new() };
+            let item_builder: ItemBuilder = ItemBuilder {
+                rules: &Vec::new(),
+                curr_depth: Cell::new(0),
+                max_depth: 10,
+            };
             let mut tmp_vec: Vec<u8> = Vec::new();
-            $item.build(&item_builder, &mut tmp_vec, &mut $rand);
+            item_builder.build(&$item.convert(), &mut tmp_vec, &mut $rand);
             str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
         }};
     }

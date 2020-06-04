@@ -1,5 +1,6 @@
 #![macro_use]
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 
 use super::fields::{Convertible, Item, ItemBuilder};
@@ -91,7 +92,11 @@ impl RuleSet {
     }
 
     pub fn build_rule(&self, ref_idx: usize, output: &mut Vec<u8>, rand: &mut Rand) {
-        let builder = ItemBuilder { rules: &self.rules };
+        let builder = ItemBuilder {
+            rules: &self.rules,
+            curr_depth: Cell::new(0),
+            max_depth: 10,
+        };
 
         let rule = builder.fetch_rule(ref_idx, rand).unwrap();
 
@@ -115,7 +120,11 @@ impl RuleSet {
     where
         T: Into<String>,
     {
-        let builder = ItemBuilder { rules: &self.rules };
+        let builder = ItemBuilder {
+            rules: &self.rules,
+            curr_depth: Cell::new(0),
+            max_depth: 10,
+        };
 
         let rule = self
             .get_rule_slow(rule_name, rand)
