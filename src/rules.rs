@@ -39,7 +39,7 @@ impl RuleSet {
             Some(v) => *v,
         };
         let converted = rule_value.convert();
-        self.rules[rule_idx].push(converted); //rule_value.convert());
+        self.rules[rule_idx].push((converted, 0));
         self
     }
 
@@ -51,7 +51,7 @@ impl RuleSet {
             };
 
             for (rule_idx, rule_list) in self.rules.iter_mut().enumerate() {
-                for (opt_idx, rule_opt) in rule_list.iter_mut().enumerate() {
+                for (opt_idx, (rule_opt, _)) in rule_list.iter_mut().enumerate() {
                     if !fetcher.finalize(rule_opt) {
                         println!(
                             "Could not finalize {}[{}]: {}",
@@ -83,7 +83,40 @@ impl RuleSet {
         self.calc_shortest_ref_length();
     }
 
-    fn calc_shortest_ref_length(&mut self) {}
+    pub fn calc_shortest_ref_length(&mut self) {
+        let mut rule_lengths: BTreeMap<usize, usize> = BTreeMap::new();
+
+        loop {
+            let mut num_resolved = 0;
+            for (rule_idx, rule_list) in self.rules.iter_mut().enumerate() {
+                if rule_lengths.contains_key(&rule_idx) || rule_list.len() == 0 {
+                    continue;
+                }
+
+                let mut min_ref_len: usize = 0xffffffff;
+                for (rule_idx, (rule_opt, opt_ref_len)) in rule_list.iter_mut().enumerate() {
+                    let length_calc = RefLenCalculator {
+                        rule_lengths: &rule_lengths,
+                    };
+
+                    if *opt_ref_len == 0 {
+                        *opt_ref_len = length_calc.calc_ref_length(rule_opt);
+                        num_resolved += 1;
+                    }
+                    if *opt_ref_len < min_ref_len {
+                        min_ref_len = *opt_ref_len;
+                    }
+                }
+                if min_ref_len != 0 {
+                    rule_lengths.insert(rule_idx, min_ref_len);
+                }
+            }
+            // there was nothing new to resolve
+            if num_resolved == 0 {
+                break;
+            }
+        }
+    }
 
     pub fn get_ref_idx<T>(&self, rule_name: T) -> Option<usize>
     where
@@ -93,11 +126,19 @@ impl RuleSet {
         Some(*self.rule_map.get(&rule_name)?)
     }
 
-    pub fn build_rule(&self, ref_idx: usize, output: &mut Vec<u8>, rand: &mut Rand) {
+    /// Build the rule specified by ref_idx, with output added to `output`,
+    /// using `rand`, and the maximum recursion depth of `max_recursion`.
+    pub fn build_rule(
+        &self,
+        ref_idx: usize,
+        output: &mut Vec<u8>,
+        rand: &mut Rand,
+        max_recursion: usize,
+    ) {
         let builder = ItemBuilder {
             rules: &self.rules,
             curr_depth: Cell::new(0),
-            max_depth: 10,
+            max_depth: max_recursion,
         };
 
         let rule = builder.fetch_rule(ref_idx, rand).unwrap();
@@ -113,7 +154,7 @@ impl RuleSet {
         let ref_idx = self.get_ref_idx(rule_name)?;
         let rules = self.rules.get(ref_idx)?;
         let rand_idx = rand.rand_u64(0, rules.len() as u64) as usize;
-        let res = rules.get(rand_idx)?;
+        let (res, _) = rules.get(rand_idx)?;
         Some(res)
     }
 
@@ -132,6 +173,28 @@ impl RuleSet {
             .get_rule_slow(rule_name, rand)
             .expect("Rule does not exist!");
         builder.build(rule, output, rand);
+    }
+}
+
+pub struct RefLenCalculator<'a> {
+    rule_lengths: &'a BTreeMap<usize, usize>,
+}
+
+impl<'a> RefLenCalculator<'a> {
+    pub fn calc_ref_length(&'a self, item: &mut Item) -> usize {
+        match item {
+            Item::And(v) => v.calc_ref_length(self),
+            Item::Or(v) => v.calc_ref_length(self),
+            Item::Ref(v) => v.calc_ref_length(self),
+            _ => 1,
+        }
+    }
+
+    pub fn get_ref_len(&'a self, rule_idx: usize) -> Option<usize> {
+        match self.rule_lengths.get(&rule_idx) {
+            Some(v) => Some(*v),
+            None => None,
+        }
     }
 }
 
@@ -216,5 +279,22 @@ mod tests {
         assert_eq!(rules.rule_map.contains_key("prune_me"), false);
         assert_eq!(rules.rule_map.contains_key("prune_me2"), false);
         assert_eq!(rules.rule_map.contains_key("prune_me3"), false);
+    }
+
+    #[test]
+    fn test_ref_length() {
+        let mut rules = RuleSet::new();
+        let rules = rules
+            .add_rule("rule", reff!("rule1"))
+            .add_rule("rule1", or!("resolved", reff!("rule2")))
+            .add_rule("rule2", or!("resolved", reff!("rule1")));
+        rules.finalize();
+
+        let get_rule_len = |name| rules.rules[rules.rule_map[name]][0].1;
+
+        assert_eq!(rules.rule_map.len(), 3);
+        assert_eq!(get_rule_len("rule"), 2);
+        assert_eq!(get_rule_len("rule1"), 1);
+        assert_eq!(get_rule_len("rule2"), 1);
     }
 }

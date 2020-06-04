@@ -1,11 +1,12 @@
 #![macro_use]
 
 use std::cell::Cell;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::str;
 
 use super::random::Rand;
-use super::rules::RefFetcher;
+use super::rules::{RefFetcher, RefLenCalculator};
 
 const SAFE_BUILD: bool = true;
 
@@ -201,6 +202,17 @@ impl And {
         res
     }
 
+    pub fn calc_ref_length(&mut self, length_calc: &RefLenCalculator) -> usize {
+        let mut max_ref_length: usize = 0;
+        for item in self.items.iter_mut() {
+            let ref_len = length_calc.calc_ref_length(item);
+            if ref_len > max_ref_length {
+                max_ref_length = ref_len;
+            }
+        }
+        max_ref_length
+    }
+
     #[inline]
     pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
         let mut idx = 0;
@@ -232,7 +244,7 @@ macro_rules! and {
 
 pub struct Or {
     pub choices: Vec<Item>,
-    pub shortest_option: usize,
+    pub shortest_options: Vec<usize>,
 }
 
 /// Converts `Or` to an Item::Or instance
@@ -260,7 +272,7 @@ impl Or {
     pub fn new() -> Or {
         Or {
             choices: Vec::new(),
-            shortest_option: 0,
+            shortest_options: Vec::new(),
         }
     }
 
@@ -273,7 +285,7 @@ impl Or {
         shortest: bool,
     ) {
         let choice_idx = if shortest {
-            self.shortest_option
+            self.shortest_options[(rand.next() as usize) % self.shortest_options.len()]
         } else {
             (rand.next() as usize) % self.choices.len()
         };
@@ -301,6 +313,27 @@ impl Or {
 
         // only prune this if we pruned all of our choices first
         self.choices.len() > 0
+    }
+
+    pub fn calc_ref_length(&mut self, length_calc: &RefLenCalculator) -> usize {
+        let mut min_ref_length: usize = 0xffffffff;
+        let mut ref_lengths: BTreeMap<usize, usize> = BTreeMap::new();
+
+        for (item_idx, item) in self.choices.iter_mut().enumerate() {
+            let ref_len = length_calc.calc_ref_length(item);
+            ref_lengths.insert(item_idx, ref_len);
+            if ref_len < min_ref_length && ref_len != 0 {
+                min_ref_length = ref_len;
+            }
+        }
+
+        for (item_idx, item_len) in ref_lengths.iter() {
+            if *item_len == min_ref_length {
+                self.shortest_options.push(*item_idx);
+            }
+        }
+
+        min_ref_length
     }
 
     pub fn add_item<T: Convertible>(mut self, choice: T) -> Self {
@@ -353,6 +386,14 @@ impl Ref {
     pub fn finalize(&mut self, ref_fetcher: &RefFetcher) -> bool {
         self.ref_idx = ref_fetcher.get_ref_idx(&self.ref_rule);
         self.ref_idx.is_some()
+    }
+
+    pub fn calc_ref_length(&mut self, length_calc: &RefLenCalculator) -> usize {
+        let refd_len = match length_calc.get_ref_len(self.ref_idx.unwrap()) {
+            Some(v) => v,
+            None => return 0,
+        };
+        refd_len + 1
     }
 
     #[inline]
@@ -665,8 +706,8 @@ mod tests {
     #[test]
     fn test_str_full_macro() {
         let charset = "hello";
-        let val = string!(min = 1, max = 5, charset = charset);
         for _ in 0..100 {
+            let val = string!(min = 1, max = 5, charset = charset);
             let res = build!(val);
             assert_eq!(res.chars().all(|x| charset.contains(x)), true);
         }
@@ -675,8 +716,8 @@ mod tests {
     #[test]
     fn test_str_max_charset_macro() {
         let charset = "hello";
-        let val = string!(max = 5, charset = charset);
         for _ in 0..100 {
+            let val = string!(max = 5, charset = charset);
             let res = build!(val);
             assert_eq!(res.chars().all(|x| charset.contains(x)), true);
         }
@@ -685,8 +726,8 @@ mod tests {
     #[test]
     fn test_str_charset_macro() {
         let charset = "hello";
-        let val = string!(charset);
         for _ in 0..100 {
+            let val = string!(charset);
             let res = build!(val);
             assert_eq!(res.chars().all(|x| charset.contains(x)), true);
         }
@@ -695,8 +736,8 @@ mod tests {
     #[test]
     fn test_str_default_macro() {
         let charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-        let val = string!();
         for _ in 0..100 {
+            let val = string!();
             let res = build!(val);
             assert_eq!(res.chars().all(|x| charset.contains(x)), true);
         }
@@ -706,8 +747,8 @@ mod tests {
     fn test_int_full_macro() {
         let choices = [3, 4, 5, 6];
         let choices: Vec<String> = choices.iter().map(|x| x.to_string()).collect();
-        let val = int!(min = 3, max = 7);
         for _ in 0..100 {
+            let val = int!(min = 3, max = 7);
             let res = build!(val);
             assert_eq!(choices.contains(&res), true);
         }
@@ -717,8 +758,8 @@ mod tests {
     fn test_int_max_macro() {
         let choices = [0, 1, 2, 3, 4, 5, 6];
         let choices: Vec<String> = choices.iter().map(|x| x.to_string()).collect();
-        let val = int!(max = 7);
         for _ in 0..100 {
+            let val = int!(max = 7);
             let res = build!(val);
             assert_eq!(choices.contains(&res), true);
         }
@@ -727,8 +768,8 @@ mod tests {
     #[test]
     fn test_int_default_macro() {
         let choices: Vec<String> = (0..1001).map(|x| x.to_string()).collect();
-        let val = int!();
         for _ in 0..1000 {
+            let val = int!();
             let res = build!(val);
             assert_eq!(choices.contains(&res), true);
         }
@@ -737,12 +778,12 @@ mod tests {
     #[test]
     fn test_opt() {
         let mut build_count = 0;
-        let val = opt!("a");
         let iters = 100;
 
         let mut rand = Rand::new(100);
 
         for _ in 0..iters {
+            let val = opt!("a");
             let res = build!(rand = rand, val);
             build_count += res.len();
         }

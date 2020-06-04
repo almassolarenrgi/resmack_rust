@@ -15,6 +15,10 @@ pub fn main() {
         .add_rule("PruneMeToo", reff!("PruneMe"))
         .add_rule("Special", "SPECIAL ONE")
         .add_rule("RefdRule", or!("Hello", "Blah", reff!("Special")))
+        .add_rule(
+            "RefdRule",
+            or!("Hello", "Blah", reff!("Special"), reff!("TestRule")),
+        )
         .add_rule("TestRule", and!(reff!("RefdRule"), "World"))
         .add_rule("TestRule2", and!(reff!("TestRule"), "World"))
         .add_rule("TestRule2", and!(reff!("TestRule"), "World"))
@@ -43,7 +47,7 @@ pub fn main() {
     //while (time::Instant::now() - start).as_millis() < (total_seconds * 1000) {
     loop {
         output.clear();
-        rules.build_rule(ref_idx, &mut output, &mut rand);
+        rules.build_rule(ref_idx, &mut output, &mut rand, 3);
         total_size += output.len();
         iters += 1;
         if iters % 0xfffff == 0 {
