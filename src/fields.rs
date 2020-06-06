@@ -82,34 +82,38 @@ impl<'a> Convertible for f64 {
 }
 
 pub struct ItemBuilder<'a> {
-    pub rules: &'a Vec<Vec<(Item, usize)>>,
-    pub curr_depth: std::cell::Cell<usize>,
+    pub rules: &'a Vec<Or>,
+    pub curr_depth: Cell<usize>,
     pub max_depth: usize,
 }
 
 impl<'a> ItemBuilder<'a> {
     #[inline]
     pub fn build(&'a self, item: &'a Item, output: &mut Vec<u8>, rand: &mut Rand) {
+        let shortest = self.curr_depth.get() >= self.max_depth;
         match item {
             Item::Direct(v) => self.direct_build(v, output),
             Item::And(v) => v.build(self, output, rand),
             Item::Ref(v) => {
                 self.curr_depth.set(self.curr_depth.get() + 1);
-                v.build(self, output, rand)
+                v.build(self, output, rand, shortest)
             }
-            Item::Or(v) => v.build(self, output, rand, self.curr_depth.get() >= self.max_depth),
-            Item::Opt(v) => v.build(self, output, rand, self.curr_depth.get() >= self.max_depth),
+            Item::Or(v) => v.build(self, output, rand, shortest),
+            Item::Opt(v) => v.build(self, output, rand, shortest),
             Item::Str(v) => v.build(self, output, rand),
             Item::Int(v) => v.build(self, output, rand),
         }
     }
 
     #[inline]
-    pub fn fetch_rule(&'a self, rule_idx: usize, rand: &mut Rand) -> Option<&Item> {
-        let rules = self.rules.get(rule_idx)?;
-        let rand_idx = (rand.next() as usize) % rules.len();
-        let (res, _) = rules.get(rand_idx)?;
-        Some(res)
+    pub fn build_rule(
+        &'a self,
+        rule_idx: usize,
+        output: &mut Vec<u8>,
+        rand: &mut Rand,
+        shortest: bool,
+    ) {
+        self.rules[rule_idx].build(self, output, rand, shortest);
     }
 
     #[inline]
@@ -252,6 +256,7 @@ macro_rules! and {
 pub struct Or {
     pub choices: Vec<Item>,
     pub shortest_options: Vec<usize>,
+    pub choice_indices: Vec<usize>,
 }
 
 /// Converts `Or` to an Item::Or instance
@@ -279,6 +284,7 @@ impl Or {
     pub fn new() -> Or {
         Or {
             choices: Vec::new(),
+            choice_indices: Vec::new(),
             shortest_options: Vec::new(),
         }
     }
@@ -291,44 +297,33 @@ impl Or {
         rand: &mut Rand,
         shortest: bool,
     ) {
-        let choice_idx = if shortest {
-            self.shortest_options[(rand.next() as usize) % self.shortest_options.len()]
-        } else {
-            (rand.next() as usize) % self.choices.len()
-        };
-        builder.build(
-            self.choices
-                .get(choice_idx as usize)
-                .expect("Shouldn't fail"),
-            output,
-            rand,
-        );
+        let choice = self.get_item(rand, shortest);
+        builder.build(choice, output, rand);
     }
 
     pub fn finalize(&mut self, fetcher: &RefFetcher) -> bool {
-        let mut to_prune: Vec<usize> = Vec::new();
+        self.choice_indices.clear();
+
         for (choice_idx, choice) in self.choices.iter_mut().enumerate() {
-            if !fetcher.finalize(choice) {
-                to_prune.push(choice_idx);
+            if fetcher.finalize(choice) {
+                self.choice_indices.push(choice_idx);
             }
         }
 
-        // remove from the end of the list first!
-        for idx in to_prune.iter().rev() {
-            self.choices.remove(*idx);
-        }
-
         // only prune this if we pruned all of our choices first
-        self.choices.len() > 0
+        self.choice_indices.len() > 0
     }
 
     pub fn calc_ref_length(&mut self, length_calc: &RefLenCalculator) -> usize {
-        let mut min_ref_length: usize = 0xffffffff;
+        self.shortest_options.clear();
+
+        let mut min_ref_length: usize = std::usize::MAX;
         let mut ref_lengths: BTreeMap<usize, usize> = BTreeMap::new();
 
-        for (item_idx, item) in self.choices.iter_mut().enumerate() {
+        for item_idx in self.choice_indices.iter_mut() {
+            let item = self.choices.get_mut(*item_idx).unwrap();
             let ref_len = length_calc.calc_ref_length(item);
-            ref_lengths.insert(item_idx, ref_len);
+            ref_lengths.insert(*item_idx, ref_len);
             if ref_len < min_ref_length && ref_len != 0 {
                 min_ref_length = ref_len;
             }
@@ -340,20 +335,59 @@ impl Or {
             }
         }
 
+        if min_ref_length == std::usize::MAX {
+            min_ref_length = 0;
+        }
+
         min_ref_length
     }
 
-    pub fn add_item<T: Convertible>(mut self, choice: T) -> Self {
+    #[inline]
+    pub fn get_item(&self, rand: &mut Rand, shortest: bool) -> &Item {
+        let choice_idx = if shortest {
+            if self.shortest_options.len() == 0 {
+                println!("NO OPTIONS!");
+                println!("CHOSEN OPTIONS");
+                self.print_options(false, "  - ");
+                println!("ALL OPTIONS");
+                self.print_options(true, "  - ");
+            }
+            self.shortest_options[(rand.next() as usize) % self.shortest_options.len()]
+        } else {
+            self.choice_indices[(rand.next() as usize) % self.choice_indices.len()]
+        };
+        &self.choices[choice_idx]
+    }
+
+    pub fn add_item<T: Convertible>(&mut self, choice: T) -> &Self {
+        self.choice_indices.push(self.choices.len());
         self.choices.push(choice.convert());
         self
+    }
+
+    pub fn print_options(&self, all_options: bool, prefix: &str) {
+        let print_opt = |opt| println!("{}{}", prefix, opt);
+
+        if all_options {
+            for opt in self.choices.iter() {
+                print_opt(opt);
+            }
+        } else {
+            for opt_idx in self.choice_indices.iter() {
+                print_opt(&self.choices[*opt_idx]);
+            }
+        }
     }
 }
 
 #[macro_export]
 macro_rules! or {
     ($($item:expr),*) => {
-        crate::fields::Or::new()
-            $(.add_item($item))*
+        {
+            let mut tmp = crate::fields::Or::new();
+            $(tmp.add_item($item);)*
+            tmp
+        }
     }
 }
 
@@ -404,17 +438,20 @@ impl Ref {
     }
 
     #[inline]
-    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
+    pub fn build(
+        &self,
+        builder: &ItemBuilder,
+        output: &mut Vec<u8>,
+        rand: &mut Rand,
+        shortest: bool,
+    ) {
         if let None = self.ref_idx {
             panic!(format!(
                 "{} was never resolved! Was finalize not called?",
                 self
             ));
         }
-        let rule = builder
-            .fetch_rule(self.ref_idx.unwrap(), rand)
-            .expect("Invalid");
-        builder.build(&rule, output, rand);
+        builder.build_rule(self.ref_idx.unwrap(), output, rand, shortest);
     }
 }
 

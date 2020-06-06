@@ -3,13 +3,13 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 
-use super::fields::{Convertible, Item, ItemBuilder};
+use super::fields::{Convertible, Item, ItemBuilder, Or};
 use super::random::Rand;
 
 pub struct RuleSet {
     pub rule_map: BTreeMap<String, usize>,
     pub rule_map_inv: BTreeMap<usize, String>,
-    pub rules: Vec<Vec<(Item, usize)>>,
+    pub rules: Vec<Or>,
 }
 
 impl RuleSet {
@@ -33,89 +33,86 @@ impl RuleSet {
                 let res = self.rules.len();
                 self.rule_map.insert(rule_name.clone(), res);
                 self.rule_map_inv.insert(res, rule_name);
-                self.rules.push(Vec::new());
+                self.rules.push(Or::new());
                 res
             }
             Some(v) => *v,
         };
-        let converted = rule_value.convert();
-        self.rules[rule_idx].push((converted, 0));
+        self.rules[rule_idx].add_item(rule_value);
         self
     }
 
     pub fn finalize(&mut self) {
-        self.finalize_and_prune_rules();
-        self.calc_shortest_ref_length();
-    }
-
-    pub fn finalize_and_prune_rules(&mut self) {
-        println!("Finalizing and pruning rules");
-        let mut to_prune: Vec<(usize, usize)> = Vec::new();
         loop {
-            let fetcher = RefFetcher {
-                rule_map: &self.rule_map,
-            };
-
-            for (rule_idx, rule_list) in self.rules.iter_mut().enumerate() {
-                for (opt_idx, (rule_opt, _)) in rule_list.iter_mut().enumerate() {
-                    if !fetcher.finalize(rule_opt) {
-                        println!(
-                            "Pruning {}[{}]: {}",
-                            self.rule_map_inv[&rule_idx], opt_idx, rule_opt,
-                        );
-                        to_prune.push((rule_idx, opt_idx));
-                    }
-                }
-            }
-
-            if to_prune.len() == 0 {
+            let mut num_pruned: usize = 0;
+            num_pruned += self.finalize_and_prune_rules();
+            println!("finalize pruned {}", num_pruned);
+            num_pruned += self.calc_shortest_ref_length();
+            println!("shortest ref pruned {}", num_pruned);
+            if num_pruned == 0 {
                 break;
             }
-
-            // iterate backwards so we remove items from the end of vecs first
-            for (rule_idx, opt_idx) in to_prune.iter().rev() {
-                self.rules[*rule_idx].remove(*opt_idx);
-                // keep the list, but remove it from the rule_map to make
-                // referencing refs fail
-                if self.rules[*rule_idx].len() == 0 {
-                    self.rule_map
-                        .remove(self.rule_map_inv.get(rule_idx).unwrap());
-                }
-            }
-
-            to_prune.clear();
         }
     }
 
-    pub fn calc_shortest_ref_length(&mut self) {
-        println!("Calculating shortest ref lengths");
-        let mut rule_lengths: BTreeMap<usize, usize> = BTreeMap::new();
-
+    pub fn finalize_and_prune_rules(&mut self) -> usize {
+        println!("Finalizing and pruning rules");
+        let mut total_pruned = 0;
         loop {
-            let mut num_resolved = 0;
-            for (rule_idx, rule_list) in self.rules.iter_mut().enumerate() {
-                if rule_lengths.contains_key(&rule_idx) || rule_list.len() == 0 {
+            let mut num_pruned = 0;
+            for (rule_idx, rule_or) in self.rules.iter_mut().enumerate() {
+                let rule_name = &self.rule_map_inv[&rule_idx];
+                // has already been pruned
+                if !self.rule_map.contains_key(rule_name) {
                     continue;
                 }
 
-                let mut min_ref_len: usize = 0xffffffff;
-                for (rule_idx, (rule_opt, opt_ref_len)) in rule_list.iter_mut().enumerate() {
-                    let length_calc = RefLenCalculator {
-                        rule_lengths: &rule_lengths,
-                    };
-
-                    if *opt_ref_len == 0 {
-                        *opt_ref_len = length_calc.calc_ref_length(rule_opt);
-                        if *opt_ref_len != 0 {
-                            num_resolved += 1;
-                        }
-                    }
-                    if *opt_ref_len < min_ref_len {
-                        min_ref_len = *opt_ref_len;
-                    }
+                let fetcher = RefFetcher {
+                    rule_map: &self.rule_map,
+                };
+                // rule Or has no options left, everything is unresolvable
+                if !rule_or.finalize(&fetcher) {
+                    println!("Pruning rule {} due to unresolvable references", rule_name);
+                    self.rule_map.remove(rule_name);
+                    total_pruned += 1;
+                    num_pruned += 1;
                 }
-                if min_ref_len != 0 {
-                    rule_lengths.insert(rule_idx, min_ref_len);
+            }
+            if num_pruned == 0 {
+                break;
+            }
+        }
+        total_pruned
+    }
+
+    pub fn calc_shortest_ref_length(&mut self) -> usize {
+        println!("Calculating shortest ref lengths");
+        let mut rule_lengths: BTreeMap<usize, usize> = BTreeMap::new();
+        let mut total_pruned = 0;
+
+        loop {
+            let mut num_resolved: usize = 0;
+            // we only iterate over the rules with resolvable references
+            for (_, rule_idx) in self.rule_map.iter() {
+                let rule_or = self.rules.get_mut(*rule_idx).unwrap();
+
+                let num_options_before = rule_or.shortest_options.len();
+                let length_calc = RefLenCalculator {
+                    rule_lengths: &rule_lengths,
+                };
+                let new_len = rule_or.calc_ref_length(&length_calc);
+                if new_len != 0 {
+                    rule_lengths.insert(*rule_idx, new_len);
+                }
+                let num_options = rule_or.shortest_options.len();
+                if num_options > num_options_before {
+                    println!(
+                        "Resolved {} new options for {}, total {}",
+                        num_options - num_options_before,
+                        self.rule_map_inv[rule_idx],
+                        num_options
+                    );
+                    num_resolved += 1;
                 }
             }
             // there was nothing new that was resolved
@@ -123,6 +120,22 @@ impl RuleSet {
                 break;
             }
         }
+
+        for (rule_idx, _) in self.rules.iter().enumerate() {
+            if rule_lengths.contains_key(&rule_idx)
+                || !self.rule_map.contains_key(&self.rule_map_inv[&rule_idx])
+            {
+                continue;
+            }
+            println!(
+                "Pruning rule {} due to undeterminable reference length",
+                self.rule_map_inv[&rule_idx]
+            );
+            self.rule_map.remove(&self.rule_map_inv[&rule_idx]);
+            total_pruned += 1;
+        }
+
+        total_pruned
     }
 
     pub fn get_ref_idx<T>(&self, rule_name: T) -> Option<usize>
@@ -147,10 +160,7 @@ impl RuleSet {
             curr_depth: Cell::new(0),
             max_depth: max_recursion,
         };
-
-        let rule = builder.fetch_rule(ref_idx, rand).unwrap();
-
-        builder.build(rule, output, rand);
+        builder.build_rule(ref_idx, output, rand, false);
     }
 
     #[allow(dead_code)]
@@ -159,10 +169,8 @@ impl RuleSet {
         T: Into<String>,
     {
         let ref_idx = self.get_ref_idx(rule_name)?;
-        let rules = self.rules.get(ref_idx)?;
-        let rand_idx = rand.rand_u64(0, rules.len() as u64) as usize;
-        let (res, _) = rules.get(rand_idx)?;
-        Some(res)
+        let rule_or: &Or = self.rules.get(ref_idx)?;
+        Some(rule_or.get_item(rand, false))
     }
 
     #[allow(dead_code)]
@@ -295,6 +303,40 @@ mod tests {
     }
 
     #[test]
+    fn test_auto_prune_circular() {
+        let mut rules = RuleSet::new();
+        let rules = rules
+            .add_rule("prune_me2", reff!("prune_me3"))
+            .add_rule("prune_me3", reff!("prune_me2"))
+            .add_rule("rule", or!(reff!("prune_me2"), "a valid rule"))
+            .add_rule("rule2", and!("oogah", reff!("rule"), "boogah"));
+        rules.finalize();
+
+        assert_eq!(rules.rule_map.len(), 2);
+        assert_eq!(rules.rule_map.contains_key("rule"), true);
+        assert_eq!(rules.rule_map.contains_key("rule2"), true);
+        assert_eq!(rules.rule_map.contains_key("prune_me2"), false);
+        assert_eq!(rules.rule_map.contains_key("prune_me3"), false);
+    }
+
+    #[test]
+    fn test_auto_prune_circular_or() {
+        let mut rules = RuleSet::new();
+        let rules = rules
+            .add_rule("prune_me2", or!(reff!("prune_me3")))
+            .add_rule("prune_me3", or!(reff!("prune_me2")))
+            .add_rule("rule", or!(reff!("prune_me2"), "a valid rule"))
+            .add_rule("rule2", and!("oogah", reff!("rule"), "boogah"));
+        rules.finalize();
+
+        assert_eq!(rules.rule_map.len(), 2);
+        assert_eq!(rules.rule_map.contains_key("rule"), true);
+        assert_eq!(rules.rule_map.contains_key("rule2"), true);
+        assert_eq!(rules.rule_map.contains_key("prune_me2"), false);
+        assert_eq!(rules.rule_map.contains_key("prune_me3"), false);
+    }
+
+    #[test]
     fn test_ref_length() {
         let mut rules = RuleSet::new();
         let rules = rules
@@ -304,13 +346,7 @@ mod tests {
             .add_rule("rule3", and!("rule3", or!("short", reff!("rule1"))));
         rules.finalize();
 
-        let get_rule_len = |name| rules.rules[rules.rule_map[name]][0].1;
-
         assert_eq!(rules.rule_map.len(), 4);
-        assert_eq!(get_rule_len("rule"), 2);
-        assert_eq!(get_rule_len("rule1"), 1);
-        assert_eq!(get_rule_len("rule2"), 1);
-        assert_eq!(get_rule_len("rule3"), 1);
 
         let ref_idx = rules.get_ref_idx("rule").unwrap();
         let mut rand = Rand::new(11111);
