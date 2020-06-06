@@ -82,8 +82,8 @@ impl<'a> Convertible for f64 {
 }
 
 pub struct ItemBuilder<'a> {
-    pub rules: &'a Vec<(Vec<(Item, usize)>, Vec<usize>)>,
-    pub curr_depth: std::cell::Cell<usize>,
+    pub rules: &'a Vec<Or>,
+    pub curr_depth: Cell<usize>,
     pub max_depth: usize,
 }
 
@@ -106,16 +106,14 @@ impl<'a> ItemBuilder<'a> {
     }
 
     #[inline]
-    pub fn fetch_rule(&'a self, rule_idx: usize, rand: &mut Rand, shortest: bool) -> Option<&Item> {
-        let (rules, shortest_idxs) = self.rules.get(rule_idx)?;
-        let rand_idx = if shortest {
-            let rand_idx = (rand.next() as usize) % shortest_idxs.len();
-            shortest_idxs[rand_idx]
-        } else {
-            (rand.next() as usize) % rules.len()
-        };
-        let (res, _) = rules.get(rand_idx)?;
-        Some(res)
+    pub fn build_rule(
+        &'a self,
+        rule_idx: usize,
+        output: &mut Vec<u8>,
+        rand: &mut Rand,
+        shortest: bool,
+    ) {
+        self.rules[rule_idx].build(self, output, rand, shortest);
     }
 
     #[inline]
@@ -299,18 +297,8 @@ impl Or {
         rand: &mut Rand,
         shortest: bool,
     ) {
-        let choice_idx = if shortest {
-            self.shortest_options[(rand.next() as usize) % self.shortest_options.len()]
-        } else {
-            self.choice_indices[(rand.next() as usize) % self.choice_indices.len()]
-        };
-        builder.build(
-            self.choices
-                .get(choice_idx as usize)
-                .expect("Shouldn't fail"),
-            output,
-            rand,
-        );
+        let choice = self.get_item(rand, shortest);
+        builder.build(choice, output, rand);
     }
 
     pub fn finalize(&mut self, fetcher: &RefFetcher) -> bool {
@@ -327,6 +315,8 @@ impl Or {
     }
 
     pub fn calc_ref_length(&mut self, length_calc: &RefLenCalculator) -> usize {
+        self.shortest_options.clear();
+
         let mut min_ref_length: usize = std::usize::MAX;
         let mut ref_lengths: BTreeMap<usize, usize> = BTreeMap::new();
 
@@ -352,18 +342,52 @@ impl Or {
         min_ref_length
     }
 
-    pub fn add_item<T: Convertible>(mut self, choice: T) -> Self {
+    #[inline]
+    pub fn get_item(&self, rand: &mut Rand, shortest: bool) -> &Item {
+        let choice_idx = if shortest {
+            if self.shortest_options.len() == 0 {
+                println!("NO OPTIONS!");
+                println!("CHOSEN OPTIONS");
+                self.print_options(false, "  - ");
+                println!("ALL OPTIONS");
+                self.print_options(true, "  - ");
+            }
+            self.shortest_options[(rand.next() as usize) % self.shortest_options.len()]
+        } else {
+            self.choice_indices[(rand.next() as usize) % self.choice_indices.len()]
+        };
+        &self.choices[choice_idx]
+    }
+
+    pub fn add_item<T: Convertible>(&mut self, choice: T) -> &Self {
         self.choice_indices.push(self.choices.len());
         self.choices.push(choice.convert());
         self
+    }
+
+    pub fn print_options(&self, all_options: bool, prefix: &str) {
+        let print_opt = |opt| println!("{}{}", prefix, opt);
+
+        if all_options {
+            for opt in self.choices.iter() {
+                print_opt(opt);
+            }
+        } else {
+            for opt_idx in self.choice_indices.iter() {
+                print_opt(&self.choices[*opt_idx]);
+            }
+        }
     }
 }
 
 #[macro_export]
 macro_rules! or {
     ($($item:expr),*) => {
-        crate::fields::Or::new()
-            $(.add_item($item))*
+        {
+            let mut tmp = crate::fields::Or::new();
+            $(tmp.add_item($item);)*
+            tmp
+        }
     }
 }
 
@@ -427,10 +451,7 @@ impl Ref {
                 self
             ));
         }
-        let rule = builder
-            .fetch_rule(self.ref_idx.unwrap(), rand, shortest)
-            .expect("Invalid");
-        builder.build(&rule, output, rand);
+        builder.build_rule(self.ref_idx.unwrap(), output, rand, shortest);
     }
 }
 
