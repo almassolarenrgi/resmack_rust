@@ -207,6 +207,7 @@ impl<'a> RefLenCalculator<'a> {
             Item::Or(v) => v.calc_ref_length(self),
             Item::Ref(v) => v.calc_ref_length(self),
             Item::Opt(v) => v.calc_ref_length(self),
+            Item::Mul(v) => v.calc_ref_length(self),
             _ => 1,
         }
     }
@@ -231,6 +232,7 @@ impl<'a> RefFetcher<'a> {
             Item::Ref(v) => v.finalize(&self),
             Item::Or(v) => v.finalize(&self),
             Item::Opt(v) => v.finalize(&self),
+            Item::Mul(v) => v.finalize(&self),
             Item::Direct(_) => true,
             Item::Str(_) => true,
             Item::Int(_) => true,

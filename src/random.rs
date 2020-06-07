@@ -56,6 +56,15 @@ impl RandXoshiro128StarStar {
         (res as i64) + min
     }
 
+    /// Generates a new value in the range `[min, max)`
+    #[inline]
+    pub fn rand_usize(&mut self, min: usize, max: usize) -> usize {
+        let num = self.next() as usize;
+        let diff = max - min;
+        let res = num % diff;
+        res + min
+    }
+
     #[inline]
     pub fn next(&mut self) -> u64 {
         let s0 = self.seed[0];
