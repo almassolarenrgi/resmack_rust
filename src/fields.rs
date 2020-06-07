@@ -19,6 +19,7 @@ pub enum Item {
     Str(Str),
     Int(Int),
     Opt(Opt),
+    Mul(Mul),
 }
 
 impl fmt::Display for Item {
@@ -31,6 +32,7 @@ impl fmt::Display for Item {
             Item::Str(v) => v.fmt(f),
             Item::Int(v) => v.fmt(f),
             Item::Opt(v) => v.fmt(f),
+            Item::Mul(v) => v.fmt(f),
         }
     }
 }
@@ -102,6 +104,7 @@ impl<'a> ItemBuilder<'a> {
             Item::Opt(v) => v.build(self, output, rand, shortest),
             Item::Str(v) => v.build(self, output, rand),
             Item::Int(v) => v.build(self, output, rand),
+            Item::Mul(v) => v.build(self, output, rand),
         }
     }
 
@@ -655,6 +658,81 @@ macro_rules! opt {
     };
 }
 
+/// The Mul struct handles both `star!` and `plus!` macros
+pub struct Mul {
+    item: Box<Item>,
+    min: usize,
+    max: usize,
+}
+
+impl Convertible for Mul {
+    fn convert(self) -> Item {
+        Item::Mul(self)
+    }
+}
+
+impl fmt::Display for Mul {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}?", self.item)
+    }
+}
+
+impl Mul {
+    pub fn new<T: Convertible>(item: T, min: usize, max: usize) -> Self {
+        if max < min {
+            panic!("Mul: max must be greater than min");
+        }
+        Mul {
+            item: Box::new(item.convert()),
+            min,
+            max,
+        }
+    }
+
+    pub fn finalize(&mut self, fetcher: &RefFetcher) -> bool {
+        fetcher.finalize(&mut self.item)
+    }
+
+    #[inline]
+    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
+        let num_times = if self.max > self.min {
+            rand.rand_usize(self.min, self.max)
+        } else {
+            self.min
+        };
+        for _ in 0..num_times {
+            builder.build(&self.item, output, rand);
+        }
+    }
+
+    pub fn calc_ref_length(&mut self, length_calc: &RefLenCalculator) -> usize {
+        length_calc.calc_ref_length(&mut self.item)
+    }
+}
+
+#[macro_export]
+macro_rules! star {
+    (min=$min:expr, max=$max:expr, $item:expr) => {
+        crate::fields::Mul::new($item, $min, $max)
+    };
+    (max=$max:expr, $item:expr) => {
+        crate::fields::Mul::new($item, 0, $max)
+    };
+    ($item:expr) => {
+        crate::fields::Mul::new($item, 0, 10)
+    };
+}
+
+#[macro_export]
+macro_rules! plus {
+    (max=$max:expr, $item:expr) => {
+        star!(min = 1, max = $max, $item)
+    };
+    ($item:expr) => {
+        star!(min = 1, max = 10, $item)
+    };
+}
+
 // ----------------------------------------------------------------------------
 // Tests
 // ----------------------------------------------------------------------------
@@ -851,5 +929,101 @@ mod tests {
             build_count += res.len();
         }
         assert_eq!(0 < build_count && build_count < iters, true);
+    }
+
+    #[test]
+    fn test_star_default() {
+        let choices: Vec<String> = (0..10)
+            .map(|x| {
+                let mut tmp = String::new();
+                for _ in 0..x {
+                    tmp.push_str("hello");
+                }
+                tmp.clone()
+            })
+            .collect();
+        for _ in 0..1000 {
+            let val = star!("hello");
+            let res = build!(val);
+            assert_eq!(choices.contains(&res), true);
+        }
+    }
+
+    #[test]
+    fn test_star_max() {
+        let max = 7;
+        let choices: Vec<String> = (0..max)
+            .map(|x| {
+                let mut tmp = String::new();
+                for _ in 0..x {
+                    tmp.push_str("hello");
+                }
+                tmp.clone()
+            })
+            .collect();
+        for _ in 0..1000 {
+            let val = star!(max = max, "hello");
+            let res = build!(val);
+            assert_eq!(choices.contains(&res), true);
+        }
+    }
+
+    #[test]
+    fn test_star_max_min() {
+        let min = 4;
+        let max = 7;
+        let choices: Vec<String> = (min..max)
+            .map(|x| {
+                let mut tmp = String::new();
+                for _ in 0..x {
+                    tmp.push_str("hello");
+                }
+                tmp.clone()
+            })
+            .collect();
+        for _ in 0..1000 {
+            let val = star!(min = min, max = max, "hello");
+            let res = build!(val);
+            assert_eq!(choices.contains(&res), true);
+        }
+    }
+
+    #[test]
+    fn test_plus_max() {
+        let max = 7;
+        let choices: Vec<String> = (1..max)
+            .map(|x| {
+                let mut tmp = String::new();
+                for _ in 0..x {
+                    tmp.push_str("hello");
+                }
+                tmp.clone()
+            })
+            .collect();
+        for _ in 0..1000 {
+            let val = plus!(max = max, "hello");
+            let res = build!(val);
+            assert_eq!(choices.contains(&res), true);
+        }
+    }
+
+    #[test]
+    fn test_plus_default() {
+        let min = 1;
+        let max = 10;
+        let choices: Vec<String> = (min..max)
+            .map(|x| {
+                let mut tmp = String::new();
+                for _ in 0..x {
+                    tmp.push_str("hello");
+                }
+                tmp.clone()
+            })
+            .collect();
+        for _ in 0..1000 {
+            let val = plus!("hello");
+            let res = build!(val);
+            assert_eq!(choices.contains(&res), true);
+        }
     }
 }
