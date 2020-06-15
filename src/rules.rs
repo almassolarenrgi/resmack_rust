@@ -1,9 +1,8 @@
 #![macro_use]
 
-use std::cell::Cell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
-use super::fields::{Convertible, Item, ItemBuilder, Or};
+use super::fields::{Convertible, Item, ItemBuilder, Or, Ref};
 use super::random::Rand;
 
 pub struct RuleSet {
@@ -29,17 +28,23 @@ impl RuleSet {
         let rule_name = rule_name.into();
 
         let rule_idx = match self.rule_map.get(&rule_name) {
-            None => {
-                let res = self.rules.len();
-                self.rule_map.insert(rule_name.clone(), res);
-                self.rule_map_inv.insert(res, rule_name);
-                self.rules.push(Or::new());
-                res
-            }
+            None => self.add_empty_rule_or(rule_name),
             Some(v) => *v,
         };
         self.rules[rule_idx].add_item(rule_value);
         self
+    }
+
+    pub fn add_empty_rule_or<T>(&mut self, rule_name: T) -> usize
+    where
+        T: Into<String>,
+    {
+        let rule_name = rule_name.into();
+        let res = self.rules.len();
+        self.rule_map.insert(rule_name.clone(), res);
+        self.rule_map_inv.insert(res, rule_name);
+        self.rules.push(Or::new());
+        res
     }
 
     pub fn finalize(&mut self) {
@@ -59,7 +64,9 @@ impl RuleSet {
         println!("Finalizing and pruning rules");
         let mut total_pruned = 0;
         loop {
+            let mut new_rules: HashSet<(usize, String)> = HashSet::new();
             let mut num_pruned = 0;
+            let mut to_prune: HashSet<String> = HashSet::new();
             for (rule_idx, rule_or) in self.rules.iter_mut().enumerate() {
                 let rule_name = &self.rule_map_inv[&rule_idx];
                 // has already been pruned
@@ -67,19 +74,37 @@ impl RuleSet {
                     continue;
                 }
 
-                let fetcher = RefFetcher {
-                    rule_map: &self.rule_map,
+                let finalized = {
+                    let mut fetcher = RefFetcher::new(&self.rule_map);
+                    let res = rule_or.finalize(&mut fetcher);
+                    if !res {
+                        for rule_name in fetcher.new_rules.iter() {
+                            new_rules.insert((rule_idx, rule_name.clone()));
+                        }
+                    }
+                    res
                 };
+
                 // rule Or has no options left, everything is unresolvable
-                if !rule_or.finalize(&fetcher) {
-                    println!("Pruning rule {} due to unresolvable references", rule_name);
-                    self.rule_map.remove(rule_name);
-                    total_pruned += 1;
-                    num_pruned += 1;
+                if !finalized && !rule_or.keep {
+                    to_prune.insert(rule_name.clone());
                 }
             }
-            if num_pruned == 0 {
+            if to_prune.len() == 0 && new_rules.len() == 0 {
                 break;
+            }
+            for (parent_rule_idx, rule_name) in new_rules.iter() {
+                println!("  Adding new rule: {}", rule_name);
+                let idx = self.add_empty_rule_or(rule_name);
+                self.rules[idx].keep = true;
+            }
+            for rule_to_prune in to_prune.iter() {
+                println!(
+                    "Pruning rule {} due to unresolvable references",
+                    rule_to_prune
+                );
+                self.rule_map.remove(rule_to_prune);
+                total_pruned += 1;
             }
         }
         total_pruned
@@ -121,9 +146,10 @@ impl RuleSet {
             }
         }
 
-        for (rule_idx, _) in self.rules.iter().enumerate() {
+        for (rule_idx, rule_or) in self.rules.iter().enumerate() {
             if rule_lengths.contains_key(&rule_idx)
                 || !self.rule_map.contains_key(&self.rule_map_inv[&rule_idx])
+                || rule_or.keep
             {
                 continue;
             }
@@ -149,18 +175,29 @@ impl RuleSet {
     /// Build the rule specified by ref_idx, with output added to `output`,
     /// using `rand`, and the maximum recursion depth of `max_recursion`.
     pub fn build_rule(
-        &self,
+        &mut self,
         ref_idx: usize,
         output: &mut Vec<u8>,
         rand: &mut Rand,
         max_recursion: usize,
     ) {
-        let builder = ItemBuilder {
-            rules: &self.rules,
-            curr_depth: Cell::new(0),
-            max_depth: max_recursion,
-        };
+        let mut builder = ItemBuilder::new(&self.rules, max_recursion);
         builder.build_rule(ref_idx, output, rand, false);
+        for (rule_idx, new_or) in builder.tmp_rules.borrow_mut().iter_mut() {
+            // NOTE: this may be expensive... it should not happen *that* often though.
+            // I think. Famous last words probably.
+            let rule_or = self.rules.get_mut(*rule_idx).unwrap();
+            for c_item in new_or.choices.iter() {
+                let len = rule_or.choices.len();
+                // currenly, only static values are ever added dynamically to
+                // rules - which makes each of these new rule choices should be
+                // in the shortest and available option indices
+                rule_or.choice_indices.push(len);
+                rule_or.shortest_options.push(len);
+                rule_or.choices.push(c_item.to_owned());
+            }
+            self.rules[*rule_idx].choices.append(&mut new_or.choices);
+        }
     }
 
     #[allow(dead_code)]
@@ -183,12 +220,7 @@ impl RuleSet {
     ) where
         T: Into<String>,
     {
-        let builder = ItemBuilder {
-            rules: &self.rules,
-            curr_depth: Cell::new(0),
-            max_depth: max_recursion,
-        };
-
+        let builder = ItemBuilder::new(&self.rules, max_recursion);
         let rule = self
             .get_rule_slow(rule_name, rand)
             .expect("Rule does not exist!");
@@ -208,6 +240,7 @@ impl<'a> RefLenCalculator<'a> {
             Item::Ref(v) => v.calc_ref_length(self),
             Item::Opt(v) => v.calc_ref_length(self),
             Item::Mul(v) => v.calc_ref_length(self),
+            Item::Id(v) => v.calc_ref_length(self),
             _ => 1,
         }
     }
@@ -222,20 +255,37 @@ impl<'a> RefLenCalculator<'a> {
 
 pub struct RefFetcher<'a> {
     pub rule_map: &'a BTreeMap<String, usize>,
+    pub new_rules: Vec<String>,
 }
 
 impl<'a> RefFetcher<'a> {
+    pub fn new(rule_map: &'a BTreeMap<String, usize>) -> RefFetcher {
+        RefFetcher {
+            rule_map,
+            new_rules: Vec::new(),
+        }
+    }
+
     /// Finalize the `Item`, returning true if the item is fully resolvable
-    pub fn finalize(&self, item: &mut Item) -> bool {
+    pub fn finalize(&mut self, item: &mut Item) -> bool {
         match item {
-            Item::And(v) => v.finalize(&self),
-            Item::Ref(v) => v.finalize(&self),
-            Item::Or(v) => v.finalize(&self),
-            Item::Opt(v) => v.finalize(&self),
-            Item::Mul(v) => v.finalize(&self),
+            Item::And(v) => v.finalize(self),
+            Item::Ref(v) => v.finalize(self),
+            Item::Or(v) => v.finalize(self),
+            Item::Opt(v) => v.finalize(self),
+            Item::Mul(v) => v.finalize(self),
             Item::Direct(_) => true,
             Item::Str(_) => true,
             Item::Int(_) => true,
+            Item::Id(v) => {
+                let res = v.finalize(self);
+                if !res {
+                    println!("  {} did not finalize, adding as new rule", v);
+                    println!("    (should finalize next loop)");
+                    self.new_rules.push(v.rule_name.clone());
+                }
+                res
+            }
         }
     }
 
@@ -286,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn test_auto_prune() {
+    fn test_auto_prune_normal() {
         let mut rules = RuleSet::new();
         let rules = rules
             .add_rule("prune_me", reff!("unresolvable"))

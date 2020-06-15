@@ -1,6 +1,6 @@
 #![macro_use]
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str;
@@ -11,6 +11,7 @@ use super::rules::{RefFetcher, RefLenCalculator};
 const SAFE_BUILD: bool = true;
 
 /// Holds the final values that are used to build resulting data
+#[derive(Clone)]
 pub enum Item {
     Direct(Vec<u8>),
     And(And),
@@ -20,6 +21,7 @@ pub enum Item {
     Int(Int),
     Opt(Opt),
     Mul(Mul),
+    Id(Id),
 }
 
 impl fmt::Display for Item {
@@ -33,6 +35,7 @@ impl fmt::Display for Item {
             Item::Int(v) => v.fmt(f),
             Item::Opt(v) => v.fmt(f),
             Item::Mul(v) => v.fmt(f),
+            Item::Id(v) => v.fmt(f),
         }
     }
 }
@@ -85,11 +88,21 @@ impl<'a> Convertible for f64 {
 
 pub struct ItemBuilder<'a> {
     pub rules: &'a Vec<Or>,
+    pub tmp_rules: RefCell<BTreeMap<usize, Or>>,
     pub curr_depth: Cell<usize>,
     pub max_depth: usize,
 }
 
 impl<'a> ItemBuilder<'a> {
+    pub fn new(rules: &Vec<Or>, max_depth: usize) -> ItemBuilder {
+        ItemBuilder {
+            rules: rules,
+            tmp_rules: RefCell::new(BTreeMap::new()), // essentially a sparse array
+            curr_depth: Cell::new(0),
+            max_depth,
+        }
+    }
+
     #[inline]
     pub fn build(&'a self, item: &'a Item, output: &mut Vec<u8>, rand: &mut Rand) {
         let shortest = self.curr_depth.get() >= self.max_depth;
@@ -105,6 +118,15 @@ impl<'a> ItemBuilder<'a> {
             Item::Str(v) => v.build(self, output, rand),
             Item::Int(v) => v.build(self, output, rand),
             Item::Mul(v) => v.build(self, output, rand),
+            Item::Id(v) => {
+                let built_id = v.build(self, output, rand);
+                let rule_idx = v.rule_idx.unwrap();
+                let mut tmp_rules = self.tmp_rules.borrow_mut();
+                if !tmp_rules.contains_key(&rule_idx) {
+                    tmp_rules.insert(rule_idx, Or::new());
+                }
+                tmp_rules.get_mut(&rule_idx).unwrap().add_item(built_id);
+            }
         }
     }
 
@@ -116,7 +138,19 @@ impl<'a> ItemBuilder<'a> {
         rand: &mut Rand,
         shortest: bool,
     ) {
-        self.rules[rule_idx].build(self, output, rand, shortest);
+        let rule_or = &self.rules[rule_idx];
+        {
+            let tmp_rules = self.tmp_rules.borrow();
+            if rule_or.choices.len() == 0 && tmp_rules.contains_key(&rule_idx) {
+                if let Item::Direct(v) = tmp_rules[&rule_idx].get_item(rand, false) {
+                    self.direct_build(v, output);
+                } else {
+                    panic!("Only direct dynamic rules are currently supported");
+                }
+                return;
+            }
+        }
+        rule_or.build(self, output, rand, shortest);
     }
 
     #[inline]
@@ -157,6 +191,7 @@ impl<'a> ItemBuilder<'a> {
 // AND
 // ----------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub struct And {
     sep: Vec<u8>,
     items: Vec<Item>,
@@ -201,7 +236,7 @@ impl And {
         self
     }
 
-    pub fn finalize(&mut self, fetcher: &RefFetcher) -> bool {
+    pub fn finalize(&mut self, fetcher: &mut RefFetcher) -> bool {
         let mut res = true;
         for item in self.items.iter_mut() {
             res &= fetcher.finalize(item);
@@ -256,10 +291,12 @@ macro_rules! and {
 // OR
 // ----------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub struct Or {
     pub choices: Vec<Item>,
     pub shortest_options: Vec<usize>,
     pub choice_indices: Vec<usize>,
+    pub keep: bool,
 }
 
 /// Converts `Or` to an Item::Or instance
@@ -289,6 +326,7 @@ impl Or {
             choices: Vec::new(),
             choice_indices: Vec::new(),
             shortest_options: Vec::new(),
+            keep: false,
         }
     }
 
@@ -304,7 +342,7 @@ impl Or {
         builder.build(choice, output, rand);
     }
 
-    pub fn finalize(&mut self, fetcher: &RefFetcher) -> bool {
+    pub fn finalize(&mut self, fetcher: &mut RefFetcher) -> bool {
         self.choice_indices.clear();
 
         for (choice_idx, choice) in self.choices.iter_mut().enumerate() {
@@ -342,6 +380,10 @@ impl Or {
             min_ref_length = 0;
         }
 
+        if self.keep && min_ref_length == 0 {
+            min_ref_length = 1
+        }
+
         min_ref_length
     }
 
@@ -365,6 +407,12 @@ impl Or {
     pub fn add_item<T: Convertible>(&mut self, choice: T) -> &Self {
         self.choice_indices.push(self.choices.len());
         self.choices.push(choice.convert());
+        self
+    }
+
+    pub fn add_item_no_convert(&mut self, choice: Item) -> &Self {
+        self.choice_indices.push(self.choices.len());
+        self.choices.push(choice);
         self
     }
 
@@ -398,6 +446,7 @@ macro_rules! or {
 // Ref
 // ----------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub struct Ref {
     pub ref_rule: String,
     pub ref_idx: Option<usize>,
@@ -427,7 +476,7 @@ impl Ref {
         }
     }
 
-    pub fn finalize(&mut self, ref_fetcher: &RefFetcher) -> bool {
+    pub fn finalize(&mut self, ref_fetcher: &mut RefFetcher) -> bool {
         self.ref_idx = ref_fetcher.get_ref_idx(&self.ref_rule);
         self.ref_idx.is_some()
     }
@@ -471,6 +520,7 @@ macro_rules! reff {
 
 /// The Str struct will be able to create a random string in the range
 /// [min, max] using the specified charset
+#[derive(Clone)]
 pub struct Str {
     min: usize,
     max: usize,
@@ -545,6 +595,7 @@ macro_rules! string {
 
 /// The Int struct will be able to create a random i64 in the range
 /// [min, max]
+#[derive(Clone)]
 pub struct Int {
     min: i64,
     max: i64,
@@ -595,6 +646,7 @@ macro_rules! int {
 
 /// The Int struct will be able to create a random i64 in the range
 /// [min, max]
+#[derive(Clone)]
 pub struct Opt {
     item: Box<Item>,
     has_refs: bool,
@@ -620,7 +672,7 @@ impl Opt {
         }
     }
 
-    pub fn finalize(&mut self, fetcher: &RefFetcher) -> bool {
+    pub fn finalize(&mut self, fetcher: &mut RefFetcher) -> bool {
         fetcher.finalize(&mut self.item)
     }
 
@@ -658,7 +710,12 @@ macro_rules! opt {
     };
 }
 
+// ----------------------------------------------------------------------------
+// Mul
+// ----------------------------------------------------------------------------
+
 /// The Mul struct handles both `star!` and `plus!` macros
+#[derive(Clone)]
 pub struct Mul {
     item: Box<Item>,
     min: usize,
@@ -673,7 +730,7 @@ impl Convertible for Mul {
 
 impl fmt::Display for Mul {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}?", self.item)
+        write!(f, "<Mul {{[{},{})}} {}>", self.min, self.max, self.item)
     }
 }
 
@@ -689,7 +746,7 @@ impl Mul {
         }
     }
 
-    pub fn finalize(&mut self, fetcher: &RefFetcher) -> bool {
+    pub fn finalize(&mut self, fetcher: &mut RefFetcher) -> bool {
         fetcher.finalize(&mut self.item)
     }
 
@@ -734,6 +791,80 @@ macro_rules! plus {
 }
 
 // ----------------------------------------------------------------------------
+// Id
+// ----------------------------------------------------------------------------
+
+/// The Id struct handles both `star!` and `plus!` macros
+#[derive(Clone)]
+pub struct Id {
+    pub rule_name: String,
+    rule_idx: Option<usize>,
+}
+
+impl Convertible for Id {
+    fn convert(self) -> Item {
+        Item::Id(self)
+    }
+}
+
+impl fmt::Display for Id {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Id<{}>", self.rule_name)
+    }
+}
+
+impl Id {
+    pub fn new<T>(rule_name: T) -> Self
+    where
+        T: Into<String>,
+    {
+        Id {
+            rule_name: rule_name.into(),
+            rule_idx: None,
+        }
+    }
+
+    pub fn finalize(&mut self, fetcher: &mut RefFetcher) -> bool {
+        self.rule_idx = fetcher.get_ref_idx(&self.rule_name);
+        self.rule_idx.is_some()
+    }
+
+    #[inline]
+    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) -> String {
+        // [10-20)
+        let rand_len = ((rand.next() as usize) % 10) + 10;
+        let mut res: Vec<u8> = vec![0; rand_len];
+        let charset = "abcdefghijklmnopqrstuvwxyz".as_bytes();
+        let len = charset.len();
+        for idx in 0..rand_len {
+            let rand_idx = (rand.next() as usize) % len;
+            res[idx] = charset[rand_idx];
+        }
+        builder.direct_build(&res, output);
+        String::from_utf8(res).expect("Invalid UTF8 somehow")
+    }
+
+    pub fn calc_ref_length(&mut self, length_calc: &RefLenCalculator) -> usize {
+        1
+    }
+}
+
+/// The `id!("rule_name")` macro creates a new random value that is stored as
+/// an option for `rule_name` *and* is written to the output buffer. Values
+/// generated by `id!("rule_name")` are accessible immediately after they are
+/// created.
+///
+/// **HOWEVER**, it is up to the user to ensure that the destination rule of the
+/// `id!()` is valid at the time of reference. Eventually resmack may address
+/// this.
+#[macro_export]
+macro_rules! id {
+    ($rule_name:expr) => {
+        crate::fields::Id::new($rule_name)
+    };
+}
+
+// ----------------------------------------------------------------------------
 // Tests
 // ----------------------------------------------------------------------------
 
@@ -750,22 +881,16 @@ mod tests {
             let since_the_epoch = start
                 .duration_since(UNIX_EPOCH)
                 .expect("Time went backwards");
-            let item_builder: ItemBuilder = ItemBuilder {
-                rules: &Vec::new(),
-                curr_depth: Cell::new(0),
-                max_depth: 10,
-            };
+            let rules = Vec::new();
+            let item_builder: ItemBuilder = ItemBuilder::new(&rules, 10);
             let mut rand = Rand::new(since_the_epoch.as_secs());
             let mut tmp_vec: Vec<u8> = Vec::new();
             item_builder.build(&$item.convert(), &mut tmp_vec, &mut rand);
             str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
         }};
         (rand=$rand:expr, $item:expr) => {{
-            let item_builder: ItemBuilder = ItemBuilder {
-                rules: &Vec::new(),
-                curr_depth: Cell::new(0),
-                max_depth: 10,
-            };
+            let rules = Vec::new();
+            let item_builder: ItemBuilder = ItemBuilder::new(&rules, 10);
             let mut tmp_vec: Vec<u8> = Vec::new();
             item_builder.build(&$item.convert(), &mut tmp_vec, &mut $rand);
             str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
