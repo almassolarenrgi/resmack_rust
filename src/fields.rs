@@ -410,12 +410,6 @@ impl Or {
         self
     }
 
-    pub fn add_item_no_convert(&mut self, choice: Item) -> &Self {
-        self.choice_indices.push(self.choices.len());
-        self.choices.push(choice);
-        self
-    }
-
     pub fn print_options(&self, all_options: bool, prefix: &str) {
         let print_opt = |opt| println!("{}{}", prefix, opt);
 
@@ -665,6 +659,7 @@ impl fmt::Display for Opt {
 }
 
 impl Opt {
+    #[allow(dead_code)]
     pub fn new<T: Convertible>(item: T) -> Self {
         Opt {
             item: Box::new(item.convert()),
@@ -735,6 +730,7 @@ impl fmt::Display for Mul {
 }
 
 impl Mul {
+    #[allow(dead_code)]
     pub fn new<T: Convertible>(item: T, min: usize, max: usize) -> Self {
         if max < min {
             panic!("Mul: max must be greater than min");
@@ -814,6 +810,7 @@ impl fmt::Display for Id {
 }
 
 impl Id {
+    #[allow(dead_code)]
     pub fn new<T>(rule_name: T) -> Self
     where
         T: Into<String>,
@@ -844,7 +841,7 @@ impl Id {
         String::from_utf8(res).expect("Invalid UTF8 somehow")
     }
 
-    pub fn calc_ref_length(&mut self, length_calc: &RefLenCalculator) -> usize {
+    pub fn calc_ref_length(&mut self, _length_calc: &RefLenCalculator) -> usize {
         1
     }
 }

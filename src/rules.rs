@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use super::fields::{Convertible, Item, ItemBuilder, Or, Ref};
+use super::fields::{Convertible, Item, ItemBuilder, Or};
 use super::random::Rand;
 
 pub struct RuleSet {
@@ -63,10 +63,11 @@ impl RuleSet {
     pub fn finalize_and_prune_rules(&mut self) -> usize {
         println!("Finalizing and pruning rules");
         let mut total_pruned = 0;
+        let mut new_rules: HashSet<(usize, String)> = HashSet::new();
+        let mut to_prune: HashSet<String> = HashSet::new();
         loop {
-            let mut new_rules: HashSet<(usize, String)> = HashSet::new();
-            let mut num_pruned = 0;
-            let mut to_prune: HashSet<String> = HashSet::new();
+            new_rules.clear();
+            to_prune.clear();
             for (rule_idx, rule_or) in self.rules.iter_mut().enumerate() {
                 let rule_name = &self.rule_map_inv[&rule_idx];
                 // has already been pruned
@@ -77,10 +78,8 @@ impl RuleSet {
                 let finalized = {
                     let mut fetcher = RefFetcher::new(&self.rule_map);
                     let res = rule_or.finalize(&mut fetcher);
-                    if !res {
-                        for rule_name in fetcher.new_rules.iter() {
-                            new_rules.insert((rule_idx, rule_name.clone()));
-                        }
+                    for rule_name in fetcher.new_rules.iter() {
+                        new_rules.insert((rule_idx, rule_name.clone()));
                     }
                     res
                 };
@@ -93,7 +92,7 @@ impl RuleSet {
             if to_prune.len() == 0 && new_rules.len() == 0 {
                 break;
             }
-            for (parent_rule_idx, rule_name) in new_rules.iter() {
+            for (_parent_rule_idx, rule_name) in new_rules.iter() {
                 println!("  Adding new rule: {}", rule_name);
                 let idx = self.add_empty_rule_or(rule_name);
                 self.rules[idx].keep = true;
@@ -181,7 +180,7 @@ impl RuleSet {
         rand: &mut Rand,
         max_recursion: usize,
     ) {
-        let mut builder = ItemBuilder::new(&self.rules, max_recursion);
+        let builder = ItemBuilder::new(&self.rules, max_recursion);
         builder.build_rule(ref_idx, output, rand, false);
         for (rule_idx, new_or) in builder.tmp_rules.borrow_mut().iter_mut() {
             // NOTE: this may be expensive... it should not happen *that* often though.
@@ -284,7 +283,7 @@ impl<'a> RefFetcher<'a> {
                     println!("    (should finalize next loop)");
                     self.new_rules.push(v.rule_name.clone());
                 }
-                res
+                true
             }
         }
     }
@@ -462,5 +461,17 @@ mod tests {
                 true
             );
         }
+    }
+
+    #[test]
+    fn test_id() {
+        let mut rules = RuleSet::new();
+        let rules = rules.add_rule("gen_id", and!("test", id!("new_rule")));
+        rules.finalize();
+
+        assert_eq!(rules.rule_map.len(), 2);
+        assert_eq!(rules.rule_map.contains_key("gen_id"), true);
+        assert_eq!(rules.rule_map.contains_key("new_rule"), true);
+        assert_eq!(rules.rules[1].choices.len(), 0);
     }
 }
