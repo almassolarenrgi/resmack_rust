@@ -1,12 +1,14 @@
 #![macro_use]
 
+use std::boxed::Box;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::fmt;
+use std::rc::Rc;
 use std::str;
 
 use super::random::Rand;
-use super::rules::{RefFetcher, RefLenCalculator};
+use super::rules::{RefFetcher, RefLenCalculator, RuleList};
 
 const SAFE_BUILD: bool = true;
 
@@ -86,15 +88,15 @@ impl<'a> Convertible for f64 {
     }
 }
 
-pub struct ItemBuilder<'a> {
-    pub rules: &'a Vec<Or>,
+pub struct ItemBuilder {
+    pub rules: Rc<RefCell<RuleList>>,
     pub tmp_rules: RefCell<BTreeMap<usize, Or>>,
     pub curr_depth: Cell<usize>,
     pub max_depth: usize,
 }
 
-impl<'a> ItemBuilder<'a> {
-    pub fn new(rules: &Vec<Or>, max_depth: usize) -> ItemBuilder {
+impl ItemBuilder {
+    pub fn new(rules: Rc<RefCell<RuleList>>, max_depth: usize) -> ItemBuilder {
         ItemBuilder {
             rules: rules,
             tmp_rules: RefCell::new(BTreeMap::new()), // essentially a sparse array
@@ -104,7 +106,7 @@ impl<'a> ItemBuilder<'a> {
     }
 
     #[inline]
-    pub fn build(&'a self, item: &'a Item, output: &mut Vec<u8>, rand: &mut Rand) {
+    pub fn build(&self, item: &Item, output: &mut Vec<u8>, rand: &mut Rand) {
         let shortest = self.curr_depth.get() >= self.max_depth;
         match item {
             Item::Direct(v) => self.direct_build(v, output),
@@ -132,13 +134,19 @@ impl<'a> ItemBuilder<'a> {
 
     #[inline]
     pub fn build_rule(
-        &'a self,
+        &self,
         rule_idx: usize,
         output: &mut Vec<u8>,
         rand: &mut Rand,
         shortest: bool,
     ) {
-        let rule_or = &self.rules[rule_idx];
+        let rules = match self.rules.borrow().resolve(rule_idx) {
+            Ok(Some(v)) => v,
+            Ok(None) => self.rules.clone(),
+            Err(_) => panic!("Could not resolve rule_idx"),
+        };
+        let rules = rules.borrow();
+        let rule_or = rules.get_rule_or(rule_idx);
         {
             let tmp_rules = self.tmp_rules.borrow();
             if rule_or.choices.len() == 0 && tmp_rules.contains_key(&rule_idx) {
@@ -154,7 +162,7 @@ impl<'a> ItemBuilder<'a> {
     }
 
     #[inline]
-    pub fn direct_build(&'a self, v: &Vec<u8>, output: &mut Vec<u8>) {
+    pub fn direct_build(&self, v: &Vec<u8>, output: &mut Vec<u8>) {
         if SAFE_BUILD {
             Self::safe_build(v, output);
         } else {
@@ -878,16 +886,16 @@ mod tests {
             let since_the_epoch = start
                 .duration_since(UNIX_EPOCH)
                 .expect("Time went backwards");
-            let rules = Vec::new();
-            let item_builder: ItemBuilder = ItemBuilder::new(&rules, 10);
+            let rules = Rc::new(RefCell::new(RuleList::new()));
+            let item_builder: ItemBuilder = ItemBuilder::new(rules, 10);
             let mut rand = Rand::new(since_the_epoch.as_secs());
             let mut tmp_vec: Vec<u8> = Vec::new();
             item_builder.build(&$item.convert(), &mut tmp_vec, &mut rand);
             str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
         }};
         (rand=$rand:expr, $item:expr) => {{
-            let rules = Vec::new();
-            let item_builder: ItemBuilder = ItemBuilder::new(&rules, 10);
+            let rules = Rc::new(RefCell::new(RuleList::new()));
+            let item_builder: ItemBuilder = ItemBuilder::new(rules, 10);
             let mut tmp_vec: Vec<u8> = Vec::new();
             item_builder.build(&$item.convert(), &mut tmp_vec, &mut $rand);
             str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
