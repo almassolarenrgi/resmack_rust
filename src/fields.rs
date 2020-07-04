@@ -89,14 +89,14 @@ impl<'a> Convertible for f64 {
 }
 
 pub struct ItemBuilder {
-    pub rules: Rc<RefCell<RuleList>>,
+    pub rules: Rc<RefCell<Box<RuleList>>>,
     pub tmp_rules: RefCell<BTreeMap<usize, Or>>,
     pub curr_depth: Cell<usize>,
     pub max_depth: usize,
 }
 
 impl ItemBuilder {
-    pub fn new(rules: Rc<RefCell<RuleList>>, max_depth: usize) -> ItemBuilder {
+    pub fn new(rules: Rc<RefCell<Box<RuleList>>>, max_depth: usize) -> ItemBuilder {
         ItemBuilder {
             rules: rules,
             tmp_rules: RefCell::new(BTreeMap::new()), // essentially a sparse array
@@ -886,7 +886,7 @@ mod tests {
             let since_the_epoch = start
                 .duration_since(UNIX_EPOCH)
                 .expect("Time went backwards");
-            let rules = Rc::new(RefCell::new(RuleList::new()));
+            let rules = Rc::new(RefCell::new(Box::new(RuleList::new())));
             let item_builder: ItemBuilder = ItemBuilder::new(rules, 10);
             let mut rand = Rand::new(since_the_epoch.as_secs());
             let mut tmp_vec: Vec<u8> = Vec::new();
@@ -894,7 +894,7 @@ mod tests {
             str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
         }};
         (rand=$rand:expr, $item:expr) => {{
-            let rules = Rc::new(RefCell::new(RuleList::new()));
+            let rules = Rc::new(RefCell::new(Box::new(RuleList::new())));
             let item_builder: ItemBuilder = ItemBuilder::new(rules, 10);
             let mut tmp_vec: Vec<u8> = Vec::new();
             item_builder.build(&$item.convert(), &mut tmp_vec, &mut $rand);

@@ -9,7 +9,7 @@ use super::fields::{Convertible, Item, ItemBuilder, Or};
 use super::random::Rand;
 
 pub struct RuleList {
-    pub parent: Option<Rc<RefCell<RuleList>>>,
+    pub parent: Option<Rc<RefCell<Box<RuleList>>>>,
     pub rules: Vec<Or>,
 }
 
@@ -17,6 +17,13 @@ impl RuleList {
     pub fn new() -> RuleList {
         RuleList {
             parent: None,
+            rules: Vec::new(),
+        }
+    }
+
+    pub fn new_with_parent(parent: Option<Rc<RefCell<Box<RuleList>>>>) -> RuleList {
+        RuleList {
+            parent,
             rules: Vec::new(),
         }
     }
@@ -36,7 +43,7 @@ impl RuleList {
         res
     }
 
-    pub fn resolve(&self, rule_idx: usize) -> Result<Option<Rc<RefCell<RuleList>>>, String> {
+    pub fn resolve(&self, rule_idx: usize) -> Result<Option<Rc<RefCell<Box<RuleList>>>>, String> {
         let rule_choices: usize = { self.rules[rule_idx].choices.len() };
         if rule_choices == 0 {
             if self.parent.is_some() {
@@ -44,7 +51,7 @@ impl RuleList {
                 let parent = tmp.borrow();
                 match parent.resolve(rule_idx) {
                     Ok(Some(v)) => Ok(Some(v)),
-                    Ok(None) => Err("Parent rules could not resolve either".to_string()),
+                    Ok(None) => Ok(self.parent.clone()),
                     Err(v) => Err(v),
                 }
             } else {
@@ -81,13 +88,13 @@ where
 pub struct RuleSet {
     pub rule_map: BTreeMap<String, usize>,
     pub rule_map_inv: BTreeMap<usize, String>,
-    pub rules: Rc<RefCell<RuleList>>,
-    pub rules_root: Rc<RefCell<RuleList>>,
+    pub rules: Rc<RefCell<Box<RuleList>>>,
+    pub rules_root: Rc<RefCell<Box<RuleList>>>,
 }
 
 impl RuleSet {
     pub fn new() -> RuleSet {
-        let rules = Rc::new(RefCell::new(RuleList::new()));
+        let rules = Rc::new(RefCell::new(Box::new(RuleList::new())));
         RuleSet {
             rule_map: BTreeMap::new(),
             rule_map_inv: BTreeMap::new(),
