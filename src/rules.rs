@@ -21,11 +21,28 @@ impl RuleList {
         }
     }
 
-    pub fn new_with_parent(parent: Option<Rc<RefCell<Box<RuleList>>>>) -> RuleList {
-        RuleList {
-            parent,
-            rules: Vec::new(),
+    #[allow(dead_code)]
+    pub fn new_from_parent(
+        parent: Option<Rc<RefCell<Box<RuleList>>>>,
+    ) -> Rc<RefCell<Box<RuleList>>> {
+        let res = Rc::new(RefCell::new(Box::new(RuleList::new())));
+        {
+            let (res_parent, parent_num_rules) = {
+                match parent {
+                    Some(v) => {
+                        let len = { v.borrow().rules.len() };
+                        (Some(v.clone()), len)
+                    }
+                    None => (None, 0),
+                }
+            };
+            let mut tmp = res.borrow_mut();
+            tmp.parent = res_parent;
+            for _ in 0..parent_num_rules {
+                tmp.add_empty_rule();
+            }
         }
+        res
     }
 
     pub fn add_rule<T>(&mut self, rule_idx: usize, rule_value: T)
@@ -547,5 +564,20 @@ mod tests {
         assert_eq!(rules.rule_map.contains_key("gen_id"), true);
         assert_eq!(rules.rule_map.contains_key("new_rule"), true);
         assert_eq!(rules.rules.borrow().rules[1].choices.len(), 0);
+    }
+
+    #[test]
+    fn test_rule_list() {
+        let mut rules = RuleSet::new();
+        let rules = rules.add_rule("in_parent", and!("hello", "world"));
+        rules.finalize();
+
+        let sub_rules = RuleList::new_from_parent(Some(rules.rules.clone()));
+        rules.rules = sub_rules;
+        let mut output: Vec<u8> = Vec::new();
+        let mut rand: Rand = Rand::new(100);
+        rules.build_rule_slow("in_parent", &mut output, &mut rand, 10);
+
+        assert_eq!(str::from_utf8(&output).unwrap(), "helloworld");
     }
 }
