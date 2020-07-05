@@ -1,12 +1,14 @@
 #![macro_use]
 
+use std::boxed::Box;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::fmt;
+use std::rc::Rc;
 use std::str;
 
 use super::random::Rand;
-use super::rules::{RefFetcher, RefLenCalculator};
+use super::rules::{RefFetcher, RefLenCalculator, RuleList};
 
 const SAFE_BUILD: bool = true;
 
@@ -22,6 +24,7 @@ pub enum Item {
     Opt(Opt),
     Mul(Mul),
     Id(Id),
+    Scoped(Scoped),
 }
 
 impl fmt::Display for Item {
@@ -36,6 +39,7 @@ impl fmt::Display for Item {
             Item::Opt(v) => v.fmt(f),
             Item::Mul(v) => v.fmt(f),
             Item::Id(v) => v.fmt(f),
+            Item::Scoped(v) => v.fmt(f),
         }
     }
 }
@@ -86,25 +90,23 @@ impl<'a> Convertible for f64 {
     }
 }
 
-pub struct ItemBuilder<'a> {
-    pub rules: &'a Vec<Or>,
-    pub tmp_rules: RefCell<BTreeMap<usize, Or>>,
+pub struct ItemBuilder {
+    pub rules: Rc<RefCell<Box<RuleList>>>,
     pub curr_depth: Cell<usize>,
     pub max_depth: usize,
 }
 
-impl<'a> ItemBuilder<'a> {
-    pub fn new(rules: &Vec<Or>, max_depth: usize) -> ItemBuilder {
+impl ItemBuilder {
+    pub fn new(rules: Rc<RefCell<Box<RuleList>>>, max_depth: usize) -> ItemBuilder {
         ItemBuilder {
             rules: rules,
-            tmp_rules: RefCell::new(BTreeMap::new()), // essentially a sparse array
             curr_depth: Cell::new(0),
             max_depth,
         }
     }
 
     #[inline]
-    pub fn build(&'a self, item: &'a Item, output: &mut Vec<u8>, rand: &mut Rand) {
+    pub fn build(&self, item: &Item, output: &mut Vec<u8>, rand: &mut Rand) {
         let shortest = self.curr_depth.get() >= self.max_depth;
         match item {
             Item::Direct(v) => self.direct_build(v, output),
@@ -121,40 +123,54 @@ impl<'a> ItemBuilder<'a> {
             Item::Id(v) => {
                 let built_id = v.build(self, output, rand);
                 let rule_idx = v.rule_idx.unwrap();
-                let mut tmp_rules = self.tmp_rules.borrow_mut();
-                if !tmp_rules.contains_key(&rule_idx) {
-                    tmp_rules.insert(rule_idx, Or::new());
-                }
-                tmp_rules.get_mut(&rule_idx).unwrap().add_item(built_id);
+                self.rules.borrow().rules[rule_idx]
+                    .borrow_mut()
+                    .add_item(built_id);
+            }
+            Item::Scoped(v) => {
+                let scoped_rules = RuleList::new_from_parent(Some(self.rules.clone()));
+                let new_builder = ItemBuilder::new(scoped_rules, self.max_depth);
+                new_builder.curr_depth.set(self.curr_depth.get());
+                v.build(&new_builder, output, rand);
+                // all scoped rules added by id!() are discarded - DO NOT MERGE
+                // THEM INTO THIS ITEMBUILDER
             }
         }
     }
 
     #[inline]
     pub fn build_rule(
-        &'a self,
+        &self,
         rule_idx: usize,
         output: &mut Vec<u8>,
         rand: &mut Rand,
         shortest: bool,
     ) {
-        let rule_or = &self.rules[rule_idx];
-        {
-            let tmp_rules = self.tmp_rules.borrow();
-            if rule_or.choices.len() == 0 && tmp_rules.contains_key(&rule_idx) {
-                if let Item::Direct(v) = tmp_rules[&rule_idx].get_item(rand, false) {
-                    self.direct_build(v, output);
-                } else {
-                    panic!("Only direct dynamic rules are currently supported");
+        let mut rules = self.rules.clone();
+        let mut options: Vec<Rc<RefCell<Box<RuleList>>>> = Vec::new();
+        loop {
+            rules = {
+                let rules_b = rules.borrow();
+                if rules_b.rules[rule_idx].borrow().choices.len() > 0 {
+                    options.push(rules.clone());
                 }
-                return;
-            }
+                if rules_b.parent.is_none() {
+                    break;
+                }
+                rules_b.parent.as_ref().unwrap().clone()
+            };
         }
-        rule_or.build(self, output, rand, shortest);
+        if options.len() == 0 {
+            panic!(format!("Could not build rule for rule_idx {}", rule_idx));
+        }
+        let rand_idx: usize = rand.next() as usize % options.len();
+        options[rand_idx].borrow().rules[rule_idx]
+            .borrow()
+            .build(self, output, rand, shortest);
     }
 
     #[inline]
-    pub fn direct_build(&'a self, v: &Vec<u8>, output: &mut Vec<u8>) {
+    pub fn direct_build(&self, v: &Vec<u8>, output: &mut Vec<u8>) {
         if SAFE_BUILD {
             Self::safe_build(v, output);
         } else {
@@ -654,7 +670,7 @@ impl Convertible for Opt {
 
 impl fmt::Display for Opt {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}?", self.item)
+        write!(f, "Opt<{}>", self.item)
     }
 }
 
@@ -862,6 +878,54 @@ macro_rules! id {
 }
 
 // ----------------------------------------------------------------------------
+// Scope
+// ----------------------------------------------------------------------------
+
+/// The Scoped struct creates a new scoped rule set that will be discarded
+/// when this scope's item is done being generated. All `id!()` values
+/// will remain in this scope and not be available outside of the scope.
+#[derive(Clone)]
+pub struct Scoped {
+    item: Box<Item>,
+}
+
+impl Convertible for Scoped {
+    fn convert(self) -> Item {
+        Item::Scoped(self)
+    }
+}
+
+impl fmt::Display for Scoped {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Scoped<{}>", self.item)
+    }
+}
+
+impl Scoped {
+    pub fn new<T: Convertible>(item: T) -> Self {
+        Scoped {
+            item: Box::new(item.convert()),
+        }
+    }
+
+    pub fn finalize(&mut self, fetcher: &mut RefFetcher) -> bool {
+        fetcher.finalize(&mut self.item)
+    }
+
+    #[inline]
+    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
+        builder.build(&self.item, output, rand);
+    }
+}
+
+#[macro_export]
+macro_rules! scoped {
+    ($item:expr) => {
+        crate::fields::Scoped::new($item)
+    };
+}
+
+// ----------------------------------------------------------------------------
 // Tests
 // ----------------------------------------------------------------------------
 
@@ -878,16 +942,16 @@ mod tests {
             let since_the_epoch = start
                 .duration_since(UNIX_EPOCH)
                 .expect("Time went backwards");
-            let rules = Vec::new();
-            let item_builder: ItemBuilder = ItemBuilder::new(&rules, 10);
+            let rules = Rc::new(RefCell::new(Box::new(RuleList::new())));
+            let item_builder: ItemBuilder = ItemBuilder::new(rules, 10);
             let mut rand = Rand::new(since_the_epoch.as_secs());
             let mut tmp_vec: Vec<u8> = Vec::new();
             item_builder.build(&$item.convert(), &mut tmp_vec, &mut rand);
             str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
         }};
         (rand=$rand:expr, $item:expr) => {{
-            let rules = Vec::new();
-            let item_builder: ItemBuilder = ItemBuilder::new(&rules, 10);
+            let rules = Rc::new(RefCell::new(Box::new(RuleList::new())));
+            let item_builder: ItemBuilder = ItemBuilder::new(rules, 10);
             let mut tmp_vec: Vec<u8> = Vec::new();
             item_builder.build(&$item.convert(), &mut tmp_vec, &mut $rand);
             str::from_utf8(&tmp_vec[..]).unwrap().to_owned()

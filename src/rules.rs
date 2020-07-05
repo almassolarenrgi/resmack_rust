@@ -1,22 +1,106 @@
 #![macro_use]
 
+use std::boxed::Box;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
+use std::rc::Rc;
 
 use super::fields::{Convertible, Item, ItemBuilder, Or};
 use super::random::Rand;
 
+pub struct RuleList {
+    pub parent: Option<Rc<RefCell<Box<RuleList>>>>,
+    pub rules: Vec<RefCell<Or>>,
+}
+
+impl RuleList {
+    pub fn new() -> RuleList {
+        RuleList {
+            parent: None,
+            rules: Vec::new(),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn new_from_parent(
+        parent: Option<Rc<RefCell<Box<RuleList>>>>,
+    ) -> Rc<RefCell<Box<RuleList>>> {
+        let mut rules = RuleList::new();
+        {
+            let (res_parent, parent_num_rules) = {
+                match parent {
+                    Some(v) => {
+                        let len = { v.borrow().rules.len() };
+                        (Some(v.clone()), len)
+                    }
+                    None => (None, 0),
+                }
+            };
+            rules.parent = res_parent;
+            for _ in 0..parent_num_rules {
+                rules.add_empty_rule();
+            }
+        }
+        Rc::new(RefCell::new(Box::new(rules)))
+    }
+
+    pub fn add_rule<T>(&mut self, rule_idx: usize, rule_value: T)
+    where
+        T: Convertible,
+    {
+        self.rules
+            .get_mut(rule_idx)
+            .unwrap()
+            .borrow_mut()
+            .add_item(rule_value);
+    }
+
+    /// Push a new empty rule into `self.rules`, returning the index of the
+    /// new, empty rule
+    pub fn add_empty_rule(&mut self) -> usize {
+        let res = self.rules.len();
+        self.rules.push(RefCell::new(Or::new()));
+        res
+    }
+
+    pub fn get_rule_or(&self, rule_idx: usize) -> &RefCell<Or> {
+        &self.rules[rule_idx]
+    }
+}
+
+// ----------------------------------------------------------------------------
+
+fn add_empty_rule_or<T>(
+    rules: &mut RuleList,
+    rule_name: T,
+    rule_map: &mut BTreeMap<String, usize>,
+    rule_map_inv: &mut BTreeMap<usize, String>,
+) -> usize
+where
+    T: Into<String>,
+{
+    let rule_name = rule_name.into();
+    let res = rules.add_empty_rule();
+    rule_map.insert(rule_name.clone(), res);
+    rule_map_inv.insert(res, rule_name);
+    res
+}
+
 pub struct RuleSet {
     pub rule_map: BTreeMap<String, usize>,
     pub rule_map_inv: BTreeMap<usize, String>,
-    pub rules: Vec<Or>,
+    pub rules: Rc<RefCell<Box<RuleList>>>,
+    pub rules_root: Rc<RefCell<Box<RuleList>>>,
 }
 
 impl RuleSet {
     pub fn new() -> RuleSet {
+        let rules = Rc::new(RefCell::new(Box::new(RuleList::new())));
         RuleSet {
             rule_map: BTreeMap::new(),
             rule_map_inv: BTreeMap::new(),
-            rules: Vec::new(),
+            rules: rules.clone(),
+            rules_root: rules,
         }
     }
 
@@ -26,25 +110,19 @@ impl RuleSet {
         T: Convertible,
     {
         let rule_name = rule_name.into();
-
-        let rule_idx = match self.rule_map.get(&rule_name) {
-            None => self.add_empty_rule_or(rule_name),
-            Some(v) => *v,
-        };
-        self.rules[rule_idx].add_item(rule_value);
+        {
+            let rule_idx = match self.rule_map.get(&rule_name) {
+                None => add_empty_rule_or(
+                    &mut self.rules.borrow_mut(),
+                    rule_name,
+                    &mut self.rule_map,
+                    &mut self.rule_map_inv,
+                ),
+                Some(v) => *v,
+            };
+            self.rules.borrow_mut().add_rule(rule_idx, rule_value);
+        }
         self
-    }
-
-    pub fn add_empty_rule_or<T>(&mut self, rule_name: T) -> usize
-    where
-        T: Into<String>,
-    {
-        let rule_name = rule_name.into();
-        let res = self.rules.len();
-        self.rule_map.insert(rule_name.clone(), res);
-        self.rule_map_inv.insert(res, rule_name);
-        self.rules.push(Or::new());
-        res
     }
 
     pub fn finalize(&mut self) {
@@ -68,7 +146,8 @@ impl RuleSet {
         loop {
             new_rules.clear();
             to_prune.clear();
-            for (rule_idx, rule_or) in self.rules.iter_mut().enumerate() {
+            for (rule_idx, rule_or) in self.rules.borrow_mut().rules.iter_mut().enumerate() {
+                let mut rule_or = rule_or.borrow_mut();
                 let rule_name = &self.rule_map_inv[&rule_idx];
                 // has already been pruned
                 if !self.rule_map.contains_key(rule_name) {
@@ -92,10 +171,24 @@ impl RuleSet {
             if to_prune.len() == 0 && new_rules.len() == 0 {
                 break;
             }
-            for (_parent_rule_idx, rule_name) in new_rules.iter() {
-                println!("  Adding new rule: {}", rule_name);
-                let idx = self.add_empty_rule_or(rule_name);
-                self.rules[idx].keep = true;
+            if new_rules.len() > 0 {
+                for (_parent_rule_idx, rule_name) in new_rules.iter() {
+                    let idx = add_empty_rule_or(
+                        &mut self.rules.borrow_mut(),
+                        rule_name,
+                        &mut self.rule_map,
+                        &mut self.rule_map_inv,
+                    );
+                    println!("  Added new rule: {}, at {}", rule_name, idx);
+                    self.rules
+                        .borrow()
+                        .rules
+                        .get(idx)
+                        .unwrap()
+                        .borrow_mut()
+                        .keep = true;
+                }
+                continue;
             }
             for rule_to_prune in to_prune.iter() {
                 println!(
@@ -113,12 +206,13 @@ impl RuleSet {
         println!("Calculating shortest ref lengths");
         let mut rule_lengths: BTreeMap<usize, usize> = BTreeMap::new();
         let mut total_pruned = 0;
+        let rules = self.rules.borrow();
 
         loop {
             let mut num_resolved: usize = 0;
             // we only iterate over the rules with resolvable references
             for (_, rule_idx) in self.rule_map.iter() {
-                let rule_or = self.rules.get_mut(*rule_idx).unwrap();
+                let mut rule_or = rules.rules[*rule_idx].borrow_mut();
 
                 let num_options_before = rule_or.shortest_options.len();
                 let length_calc = RefLenCalculator {
@@ -145,7 +239,8 @@ impl RuleSet {
             }
         }
 
-        for (rule_idx, rule_or) in self.rules.iter().enumerate() {
+        for (rule_idx, rule_or) in rules.rules.iter().enumerate() {
+            let rule_or = rule_or.borrow();
             if rule_lengths.contains_key(&rule_idx)
                 || !self.rule_map.contains_key(&self.rule_map_inv[&rule_idx])
                 || rule_or.keep
@@ -179,51 +274,30 @@ impl RuleSet {
         output: &mut Vec<u8>,
         rand: &mut Rand,
         max_recursion: usize,
+        keep: bool,
     ) {
-        let builder = ItemBuilder::new(&self.rules, max_recursion);
+        let build_rules = if keep {
+            self.rules.clone()
+        } else {
+            RuleList::new_from_parent(Some(self.rules.clone()))
+        };
+        let builder = ItemBuilder::new(build_rules, max_recursion);
         builder.build_rule(ref_idx, output, rand, false);
-        for (rule_idx, new_or) in builder.tmp_rules.borrow_mut().iter_mut() {
-            // NOTE: this may be expensive... it should not happen *that* often though.
-            // I think. Famous last words probably.
-            let rule_or = self.rules.get_mut(*rule_idx).unwrap();
-            for c_item in new_or.choices.iter() {
-                let len = rule_or.choices.len();
-                // currenly, only static values are ever added dynamically to
-                // rules - which makes each of these new rule choices should be
-                // in the shortest and available option indices
-                rule_or.choice_indices.push(len);
-                rule_or.shortest_options.push(len);
-                rule_or.choices.push(c_item.to_owned());
-            }
-            self.rules[*rule_idx].choices.append(&mut new_or.choices);
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn get_rule_slow<'a, T>(&'a self, rule_name: T, rand: &mut Rand) -> Option<&'a Item>
-    where
-        T: Into<String>,
-    {
-        let ref_idx = self.get_ref_idx(rule_name)?;
-        let rule_or: &Or = self.rules.get(ref_idx)?;
-        Some(rule_or.get_item(rand, false))
     }
 
     #[allow(dead_code)]
     pub fn build_rule_slow<'a, T>(
-        &'a self,
+        &'a mut self,
         rule_name: T,
         output: &mut Vec<u8>,
         rand: &mut Rand,
         max_recursion: usize,
+        keep: bool,
     ) where
         T: Into<String>,
     {
-        let builder = ItemBuilder::new(&self.rules, max_recursion);
-        let rule = self
-            .get_rule_slow(rule_name, rand)
-            .expect("Rule does not exist!");
-        builder.build(rule, output, rand);
+        let ref_idx = self.get_ref_idx(rule_name).expect("Rule does not exist");
+        self.build_rule(ref_idx, output, rand, max_recursion, keep);
     }
 }
 
@@ -273,6 +347,7 @@ impl<'a> RefFetcher<'a> {
             Item::Or(v) => v.finalize(self),
             Item::Opt(v) => v.finalize(self),
             Item::Mul(v) => v.finalize(self),
+            Item::Scoped(v) => v.finalize(self),
             Item::Direct(_) => true,
             Item::Str(_) => true,
             Item::Int(_) => true,
@@ -307,13 +382,12 @@ mod tests {
     #[test]
     fn test_rule_set() {
         let mut rules = RuleSet::new();
-        let mut rand = Rand::new(0);
         let rules = rules.add_rule("rule", and!(sep = "", "hello", "there"));
         rules.finalize();
 
-        assert_eq!(rules.rules.len(), 1);
+        assert_eq!(rules.rules.borrow().rules.len(), 1);
 
-        let rule = rules.get_rule_slow("rule", &mut rand);
+        let rule = rules.get_ref_idx("rule");
         assert_eq!(rule.is_some(), true);
     }
 
@@ -327,7 +401,7 @@ mod tests {
         rules.finalize();
 
         let mut output: Vec<u8> = Vec::new();
-        rules.build_rule_slow("rule2", &mut output, &mut rand, 10);
+        rules.build_rule_slow("rule2", &mut output, &mut rand, 10, true);
         assert_eq!(
             str::from_utf8(&output[..]).unwrap(),
             "oogahhellothereboogah"
@@ -405,7 +479,7 @@ mod tests {
         let mut max_recursion = 1;
         for _ in 0..100 {
             let mut output: Vec<u8> = Vec::new();
-            rules.build_rule(ref_idx, &mut output, &mut rand, max_recursion);
+            rules.build_rule(ref_idx, &mut output, &mut rand, max_recursion, true);
             let res = std::str::from_utf8(&output).unwrap();
             assert_ne!(res, "rulerule");
         }
@@ -413,7 +487,7 @@ mod tests {
         max_recursion = 1;
         for _ in 0..100 {
             let mut output: Vec<u8> = Vec::new();
-            rules.build_rule(ref_idx, &mut output, &mut rand, max_recursion);
+            rules.build_rule(ref_idx, &mut output, &mut rand, max_recursion, true);
             let res = std::str::from_utf8(&output).unwrap();
             assert_eq!(["rulerule1short"].contains(&res), true);
         }
@@ -421,7 +495,7 @@ mod tests {
         max_recursion = 2;
         for _ in 0..100 {
             let mut output: Vec<u8> = Vec::new();
-            rules.build_rule(ref_idx, &mut output, &mut rand, max_recursion);
+            rules.build_rule(ref_idx, &mut output, &mut rand, max_recursion, true);
             let res = std::str::from_utf8(&output).unwrap();
             assert_eq!(
                 ["rulerule1short", "rulerule1rule2short"].contains(&res),
@@ -432,7 +506,7 @@ mod tests {
         max_recursion = 3;
         for _ in 0..100 {
             let mut output: Vec<u8> = Vec::new();
-            rules.build_rule(ref_idx, &mut output, &mut rand, max_recursion);
+            rules.build_rule(ref_idx, &mut output, &mut rand, max_recursion, true);
             let res = std::str::from_utf8(&output).unwrap();
             assert_eq!(
                 [
@@ -448,7 +522,7 @@ mod tests {
         max_recursion = 4;
         for _ in 0..100 {
             let mut output: Vec<u8> = Vec::new();
-            rules.build_rule(ref_idx, &mut output, &mut rand, max_recursion);
+            rules.build_rule(ref_idx, &mut output, &mut rand, max_recursion, true);
             let res = std::str::from_utf8(&output).unwrap();
             assert_eq!(
                 [
@@ -472,6 +546,67 @@ mod tests {
         assert_eq!(rules.rule_map.len(), 2);
         assert_eq!(rules.rule_map.contains_key("gen_id"), true);
         assert_eq!(rules.rule_map.contains_key("new_rule"), true);
-        assert_eq!(rules.rules[1].choices.len(), 0);
+        assert_eq!(rules.rules.borrow().rules[1].borrow().choices.len(), 0);
+    }
+
+    #[test]
+    fn test_rule_list() {
+        let mut rules = RuleSet::new();
+        let rules = rules.add_rule("in_parent", and!("hello", "world"));
+        rules.finalize();
+
+        let sub_rules = RuleList::new_from_parent(Some(rules.rules.clone()));
+        rules.rules = sub_rules;
+        let mut output: Vec<u8> = Vec::new();
+        let mut rand: Rand = Rand::new(100);
+        rules.build_rule_slow("in_parent", &mut output, &mut rand, 10, true);
+
+        assert_eq!(str::from_utf8(&output).unwrap(), "helloworld");
+    }
+
+    #[test]
+    fn test_scoped() {
+        let mut rules = RuleSet::new();
+        let rules = rules
+            .add_rule("define_variable", and!("var ", id!("varname"), " = 10;"))
+            .add_rule(
+                "statements",
+                and!(
+                    sep = "\n",
+                    reff!("define_variable"),
+                    and!(reff!("varname"), " += 20")
+                ),
+            )
+            .add_rule(
+                "function",
+                and!(
+                    sep = "\n",
+                    "(function(){",
+                    scoped!(reff!("statements")),
+                    "})()"
+                ),
+            )
+            .add_rule(
+                "both",
+                and!(sep = "\n\n", reff!("statements"), reff!("function")),
+            );
+        rules.finalize();
+
+        let mut output: Vec<u8> = Vec::new();
+        let mut rand: Rand = Rand::new(102);
+        rules.build_rule_slow("both", &mut output, &mut rand, 10, true);
+        let varname_idx: usize = rules.get_ref_idx("define_variable").unwrap();
+
+        let rules_b = rules.rules.borrow();
+        assert_eq!(
+            rules_b
+                .rules
+                .get(varname_idx)
+                .unwrap()
+                .borrow()
+                .choices
+                .len(),
+            1
+        );
     }
 }

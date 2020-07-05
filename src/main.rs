@@ -47,7 +47,7 @@ pub fn main() {
     //while (time::Instant::now() - start).as_millis() < (total_seconds * 1000) {
     loop {
         output.clear();
-        rules.build_rule(ref_idx, &mut output, &mut rand, 3);
+        rules.build_rule(ref_idx, &mut output, &mut rand, 3, false);
         total_size += output.len();
         iters += 1;
         if iters % 0xfffff == 0 {
