@@ -189,15 +189,18 @@ impl RuleSet {
             if to_prune.len() == 0 && new_rules.len() == 0 {
                 break;
             }
-            for (_parent_rule_idx, rule_name) in new_rules.iter() {
-                println!("  Adding new rule: {}", rule_name);
-                let idx = add_empty_rule_or(
-                    &mut rules,
-                    rule_name,
-                    &mut self.rule_map,
-                    &mut self.rule_map_inv,
-                );
-                rules.rules[idx].keep = true;
+            if new_rules.len() > 0 {
+                for (_parent_rule_idx, rule_name) in new_rules.iter() {
+                    let idx = add_empty_rule_or(
+                        &mut rules,
+                        rule_name,
+                        &mut self.rule_map,
+                        &mut self.rule_map_inv,
+                    );
+                    println!("  Added new rule: {}, at {}", rule_name, idx);
+                    rules.rules[idx].keep = true;
+                }
+                continue;
             }
             for rule_to_prune in to_prune.iter() {
                 println!(
@@ -365,6 +368,7 @@ impl<'a> RefFetcher<'a> {
             Item::Or(v) => v.finalize(self),
             Item::Opt(v) => v.finalize(self),
             Item::Mul(v) => v.finalize(self),
+            Item::Scoped(v) => v.finalize(self),
             Item::Direct(_) => true,
             Item::Str(_) => true,
             Item::Int(_) => true,
@@ -579,5 +583,43 @@ mod tests {
         rules.build_rule_slow("in_parent", &mut output, &mut rand, 10);
 
         assert_eq!(str::from_utf8(&output).unwrap(), "helloworld");
+    }
+
+    #[test]
+    fn test_scoped() {
+        let mut rules = RuleSet::new();
+        let rules = rules
+            .add_rule("define_variable", and!("var ", id!("varname"), " = 10;"))
+            .add_rule(
+                "statements",
+                and!(
+                    sep = "\n",
+                    reff!("define_variable"),
+                    and!(reff!("varname"), " += 20")
+                ),
+            )
+            .add_rule(
+                "function",
+                and!(
+                    sep = "\n",
+                    "(function(){",
+                    scoped!(reff!("statements")),
+                    "})()"
+                ),
+            )
+            .add_rule(
+                "both",
+                and!(sep = "\n\n", reff!("statements"), reff!("function")),
+            );
+        rules.finalize();
+
+        let mut output: Vec<u8> = Vec::new();
+        let mut rand: Rand = Rand::new(101);
+        rules.build_rule_slow("both", &mut output, &mut rand, 10);
+        println!(
+            "-------\n\n{}\n\n--------",
+            str::from_utf8(&output).unwrap()
+        );
+        assert_eq!(false, true);
     }
 }

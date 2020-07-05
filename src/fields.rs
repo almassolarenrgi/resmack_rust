@@ -24,6 +24,7 @@ pub enum Item {
     Opt(Opt),
     Mul(Mul),
     Id(Id),
+    Scoped(Scoped),
 }
 
 impl fmt::Display for Item {
@@ -38,6 +39,7 @@ impl fmt::Display for Item {
             Item::Opt(v) => v.fmt(f),
             Item::Mul(v) => v.fmt(f),
             Item::Id(v) => v.fmt(f),
+            Item::Scoped(v) => v.fmt(f),
         }
     }
 }
@@ -129,6 +131,14 @@ impl ItemBuilder {
                 }
                 tmp_rules.get_mut(&rule_idx).unwrap().add_item(built_id);
             }
+            Item::Scoped(v) => {
+                let scoped_rules = RuleList::new_from_parent(Some(self.rules.clone()));
+                let new_builder = ItemBuilder::new(scoped_rules, self.max_depth);
+                new_builder.curr_depth.set(self.curr_depth.get());
+                v.build(&new_builder, output, rand);
+                // all scoped rules added by id!() are discarded - DO NOT MERGE
+                // THEM INTO THIS ITEMBUILDER
+            }
         }
     }
 
@@ -140,22 +150,34 @@ impl ItemBuilder {
         rand: &mut Rand,
         shortest: bool,
     ) {
-        let rules = match self.rules.borrow().resolve(rule_idx) {
-            Ok(Some(v)) => v,
-            Ok(None) => self.rules.clone(),
-            Err(_) => panic!("Could not resolve rule_idx"),
-        };
-        let rules = rules.borrow();
-        let rule_or = rules.get_rule_or(rule_idx);
-        {
+        let mut resolve_tmp = || {
             let tmp_rules = self.tmp_rules.borrow();
-            if rule_or.choices.len() == 0 && tmp_rules.contains_key(&rule_idx) {
+            if tmp_rules.contains_key(&rule_idx) {
                 if let Item::Direct(v) = tmp_rules[&rule_idx].get_item(rand, false) {
                     self.direct_build(v, output);
                 } else {
                     panic!("Only direct dynamic rules are currently supported");
                 }
                 return;
+            } else {
+                panic!(format!("Could not resolve rule_idx {}", rule_idx));
+            }
+        };
+
+        let rules = match self.rules.borrow().resolve(rule_idx) {
+            Ok(Some(v)) => v,
+            Ok(None) => self.rules.clone(),
+            Err(_) => {
+                resolve_tmp();
+                return;
+            }
+        };
+        let rules = rules.borrow();
+        let rule_or = rules.get_rule_or(rule_idx);
+        {
+            let tmp_rules = self.tmp_rules.borrow();
+            if rule_or.choices.len() == 0 {
+                resolve_tmp();
             }
         }
         rule_or.build(self, output, rand, shortest);
@@ -662,7 +684,7 @@ impl Convertible for Opt {
 
 impl fmt::Display for Opt {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}?", self.item)
+        write!(f, "Opt<{}>", self.item)
     }
 }
 
@@ -866,6 +888,54 @@ impl Id {
 macro_rules! id {
     ($rule_name:expr) => {
         crate::fields::Id::new($rule_name)
+    };
+}
+
+// ----------------------------------------------------------------------------
+// Scope
+// ----------------------------------------------------------------------------
+
+/// The Scoped struct creates a new scoped rule set that will be discarded
+/// when this scope's item is done being generated. All `id!()` values
+/// will remain in this scope and not be available outside of the scope.
+#[derive(Clone)]
+pub struct Scoped {
+    item: Box<Item>,
+}
+
+impl Convertible for Scoped {
+    fn convert(self) -> Item {
+        Item::Scoped(self)
+    }
+}
+
+impl fmt::Display for Scoped {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Scoped<{}>", self.item)
+    }
+}
+
+impl Scoped {
+    pub fn new<T: Convertible>(item: T) -> Self {
+        Scoped {
+            item: Box::new(item.convert()),
+        }
+    }
+
+    pub fn finalize(&mut self, fetcher: &mut RefFetcher) -> bool {
+        fetcher.finalize(&mut self.item)
+    }
+
+    #[inline]
+    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
+        builder.build(&self.item, output, rand);
+    }
+}
+
+#[macro_export]
+macro_rules! scoped {
+    ($item:expr) => {
+        crate::fields::Scoped::new($item)
     };
 }
 
