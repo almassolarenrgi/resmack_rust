@@ -92,7 +92,6 @@ impl<'a> Convertible for f64 {
 
 pub struct ItemBuilder {
     pub rules: Rc<RefCell<Box<RuleList>>>,
-    pub tmp_rules: RefCell<BTreeMap<usize, Or>>,
     pub curr_depth: Cell<usize>,
     pub max_depth: usize,
 }
@@ -101,7 +100,6 @@ impl ItemBuilder {
     pub fn new(rules: Rc<RefCell<Box<RuleList>>>, max_depth: usize) -> ItemBuilder {
         ItemBuilder {
             rules: rules,
-            tmp_rules: RefCell::new(BTreeMap::new()), // essentially a sparse array
             curr_depth: Cell::new(0),
             max_depth,
         }
@@ -125,11 +123,9 @@ impl ItemBuilder {
             Item::Id(v) => {
                 let built_id = v.build(self, output, rand);
                 let rule_idx = v.rule_idx.unwrap();
-                let mut tmp_rules = self.tmp_rules.borrow_mut();
-                if !tmp_rules.contains_key(&rule_idx) {
-                    tmp_rules.insert(rule_idx, Or::new());
-                }
-                tmp_rules.get_mut(&rule_idx).unwrap().add_item(built_id);
+                self.rules.borrow().rules[rule_idx]
+                    .borrow_mut()
+                    .add_item(built_id);
             }
             Item::Scoped(v) => {
                 let scoped_rules = RuleList::new_from_parent(Some(self.rules.clone()));
@@ -150,37 +146,27 @@ impl ItemBuilder {
         rand: &mut Rand,
         shortest: bool,
     ) {
-        let mut resolve_tmp = || {
-            let tmp_rules = self.tmp_rules.borrow();
-            if tmp_rules.contains_key(&rule_idx) {
-                if let Item::Direct(v) = tmp_rules[&rule_idx].get_item(rand, false) {
-                    self.direct_build(v, output);
-                } else {
-                    panic!("Only direct dynamic rules are currently supported");
+        let mut rules = self.rules.clone();
+        let mut options: Vec<Rc<RefCell<Box<RuleList>>>> = Vec::new();
+        loop {
+            rules = {
+                let rules_b = rules.borrow();
+                if rules_b.rules[rule_idx].borrow().choices.len() > 0 {
+                    options.push(rules.clone());
                 }
-                return;
-            } else {
-                panic!(format!("Could not resolve rule_idx {}", rule_idx));
-            }
-        };
-
-        let rules = match self.rules.borrow().resolve(rule_idx) {
-            Ok(Some(v)) => v,
-            Ok(None) => self.rules.clone(),
-            Err(_) => {
-                resolve_tmp();
-                return;
-            }
-        };
-        let rules = rules.borrow();
-        let rule_or = rules.get_rule_or(rule_idx);
-        {
-            let tmp_rules = self.tmp_rules.borrow();
-            if rule_or.choices.len() == 0 {
-                resolve_tmp();
-            }
+                if rules_b.parent.is_none() {
+                    break;
+                }
+                rules_b.parent.as_ref().unwrap().clone()
+            };
         }
-        rule_or.build(self, output, rand, shortest);
+        if options.len() == 0 {
+            panic!(format!("Could not build rule for rule_idx {}", rule_idx));
+        }
+        let rand_idx: usize = rand.next() as usize % options.len();
+        options[rand_idx].borrow().rules[rule_idx]
+            .borrow()
+            .build(self, output, rand, shortest);
     }
 
     #[inline]
