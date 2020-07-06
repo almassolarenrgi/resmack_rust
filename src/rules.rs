@@ -282,7 +282,10 @@ impl RuleSet {
             RuleList::new_from_parent(Some(self.rules.clone()))
         };
         let builder = ItemBuilder::new(build_rules, max_recursion);
-        builder.build_rule(ref_idx, output, rand, false);
+
+        let mut tmp_output: Vec<u8> = Vec::new();
+        builder.build_rule(ref_idx, output, &mut tmp_output, rand, false);
+        output.extend(&tmp_output);
     }
 
     #[allow(dead_code)]
@@ -314,6 +317,7 @@ impl<'a> RefLenCalculator<'a> {
             Item::Opt(v) => v.calc_ref_length(self),
             Item::Mul(v) => v.calc_ref_length(self),
             Item::Id(v) => v.calc_ref_length(self),
+            Item::PreId(v) => v.calc_ref_length(self),
             _ => 1,
         }
     }
@@ -360,6 +364,15 @@ impl<'a> RefFetcher<'a> {
                 }
                 true
             }
+            Item::PreId(v) => {
+                let res = v.finalize(self);
+                if !res {
+                    println!("  {} did not finalize, adding as new rule", v);
+                    println!("    (should finalize next loop)");
+                    self.new_rules.push(v.rule_name.clone());
+                }
+                true
+            }
         }
     }
 
@@ -376,6 +389,7 @@ impl<'a> RefFetcher<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fields::PRE_ID;
     use crate::random::Rand;
     use std::str;
 
@@ -547,6 +561,43 @@ mod tests {
         assert_eq!(rules.rule_map.contains_key("gen_id"), true);
         assert_eq!(rules.rule_map.contains_key("new_rule"), true);
         assert_eq!(rules.rules.borrow().rules[1].borrow().choices.len(), 0);
+    }
+
+    #[test]
+    fn test_pre_id() {
+        let mut rules = RuleSet::new();
+        #[rustfmt::skip]
+        let rules = rules
+            .add_rule("var_10", pre_id!(rule="10", sep="",
+                "var ", PRE_ID, " = 10; "
+            ))
+            .add_rule("var_20", pre_id!(rule="20", sep="",
+                "var ", PRE_ID, " = ", reff!("var_10"), " + 10; "
+            ))
+            .add_rule("plus_eq_two", and!(reff!("var_20"), " += 2;"));
+        rules.finalize();
+
+        let get_id = |rules: &RuleSet, rule_name: String| -> String {
+            let idx = rules.rule_map[&rule_name];
+            match &rules.rules.borrow().rules[idx].borrow().choices[0] {
+                Item::Direct(v) => str::from_utf8(&v).unwrap().to_string(),
+                _ => panic!(format!("Id {:?} did not exist", rule_name)),
+            }
+        };
+
+        let mut output: Vec<u8> = Vec::new();
+        let mut rand: Rand = Rand::new(100);
+        rules.build_rule_slow("plus_eq_two", &mut output, &mut rand, 10, true);
+        // var ytficfdidqo = 10; var dtxlhgbihrwxnzom = ytficfdidqo + 10; dtxlhgbihrwxnzom += 2;
+        let output = str::from_utf8(&output).unwrap();
+        assert_eq!(
+            output,
+            format!(
+                "var {var10} = 10; var {var20} = {var10} + 10; {var20} += 2;",
+                var10 = get_id(rules, "10".to_string()),
+                var20 = get_id(rules, "20".to_string()),
+            )
+        );
     }
 
     #[test]

@@ -24,6 +24,7 @@ pub enum Item {
     Opt(Opt),
     Mul(Mul),
     Id(Id),
+    PreId(PreId),
     Scoped(Scoped),
 }
 
@@ -39,6 +40,7 @@ impl fmt::Display for Item {
             Item::Opt(v) => v.fmt(f),
             Item::Mul(v) => v.fmt(f),
             Item::Id(v) => v.fmt(f),
+            Item::PreId(v) => v.fmt(f),
             Item::Scoped(v) => v.fmt(f),
         }
     }
@@ -63,6 +65,14 @@ impl<'a> Convertible for &str {
     #[inline]
     fn convert(self) -> Item {
         Item::Direct(self.as_bytes().to_vec())
+    }
+}
+
+/// Converts `String` to an Item::Direct instance
+impl<'a> Convertible for &[u8] {
+    #[inline]
+    fn convert(self) -> Item {
+        Item::Direct(self.to_vec())
     }
 }
 
@@ -106,22 +116,35 @@ impl ItemBuilder {
     }
 
     #[inline]
-    pub fn build(&self, item: &Item, output: &mut Vec<u8>, rand: &mut Rand) {
+    pub fn build(
+        &self,
+        item: &Item,
+        pre_output: &mut Vec<u8>,
+        output: &mut Vec<u8>,
+        rand: &mut Rand,
+    ) {
         let shortest = self.curr_depth.get() >= self.max_depth;
         match item {
             Item::Direct(v) => self.direct_build(v, output),
-            Item::And(v) => v.build(self, output, rand),
+            Item::And(v) => v.build(self, pre_output, output, rand),
             Item::Ref(v) => {
                 self.curr_depth.set(self.curr_depth.get() + 1);
-                v.build(self, output, rand, shortest)
+                v.build(self, pre_output, output, rand, shortest)
             }
-            Item::Or(v) => v.build(self, output, rand, shortest),
-            Item::Opt(v) => v.build(self, output, rand, shortest),
-            Item::Str(v) => v.build(self, output, rand),
-            Item::Int(v) => v.build(self, output, rand),
-            Item::Mul(v) => v.build(self, output, rand),
+            Item::Or(v) => v.build(self, pre_output, output, rand, shortest),
+            Item::Opt(v) => v.build(self, pre_output, output, rand, shortest),
+            Item::Str(v) => v.build(self, pre_output, output, rand),
+            Item::Int(v) => v.build(self, pre_output, output, rand),
+            Item::Mul(v) => v.build(self, pre_output, output, rand),
             Item::Id(v) => {
                 let built_id = v.build(self, output, rand);
+                let rule_idx = v.rule_idx.unwrap();
+                self.rules.borrow().rules[rule_idx]
+                    .borrow_mut()
+                    .add_item(built_id);
+            }
+            Item::PreId(v) => {
+                let built_id = v.build(self, pre_output, output, rand);
                 let rule_idx = v.rule_idx.unwrap();
                 self.rules.borrow().rules[rule_idx]
                     .borrow_mut()
@@ -131,7 +154,7 @@ impl ItemBuilder {
                 let scoped_rules = RuleList::new_from_parent(Some(self.rules.clone()));
                 let new_builder = ItemBuilder::new(scoped_rules, self.max_depth);
                 new_builder.curr_depth.set(self.curr_depth.get());
-                v.build(&new_builder, output, rand);
+                v.build(&new_builder, pre_output, output, rand);
                 // all scoped rules added by id!() are discarded - DO NOT MERGE
                 // THEM INTO THIS ITEMBUILDER
             }
@@ -142,6 +165,7 @@ impl ItemBuilder {
     pub fn build_rule(
         &self,
         rule_idx: usize,
+        pre_output: &mut Vec<u8>,
         output: &mut Vec<u8>,
         rand: &mut Rand,
         shortest: bool,
@@ -164,9 +188,11 @@ impl ItemBuilder {
             panic!(format!("Could not build rule for rule_idx {}", rule_idx));
         }
         let rand_idx: usize = rand.next() as usize % options.len();
-        options[rand_idx].borrow().rules[rule_idx]
+        #[rustfmt::skip]
+        let rules = options[rand_idx].borrow();
+        rules.rules[rule_idx]
             .borrow()
-            .build(self, output, rand, shortest);
+            .build(self, pre_output, output, rand, shortest);
     }
 
     #[inline]
@@ -279,14 +305,18 @@ impl And {
     }
 
     #[inline]
-    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
-        let mut idx = 0;
-        for item in self.items.iter() {
+    pub fn build(
+        &self,
+        builder: &ItemBuilder,
+        pre_output: &mut Vec<u8>,
+        output: &mut Vec<u8>,
+        rand: &mut Rand,
+    ) {
+        for (idx, item) in self.items.iter().enumerate() {
             if self.sep.len() > 0 && idx > 0 {
                 builder.direct_build(&self.sep, output);
             }
-            builder.build(item, output, rand);
-            idx += 1;
+            builder.build(item, pre_output, output, rand);
         }
     }
 }
@@ -350,12 +380,13 @@ impl Or {
     pub fn build(
         &self,
         builder: &ItemBuilder,
+        pre_output: &mut Vec<u8>,
         output: &mut Vec<u8>,
         rand: &mut Rand,
         shortest: bool,
     ) {
         let choice = self.get_item(rand, shortest);
-        builder.build(choice, output, rand);
+        builder.build(choice, pre_output, output, rand);
     }
 
     pub fn finalize(&mut self, fetcher: &mut RefFetcher) -> bool {
@@ -503,6 +534,7 @@ impl Ref {
     pub fn build(
         &self,
         builder: &ItemBuilder,
+        pre_output: &mut Vec<u8>,
         output: &mut Vec<u8>,
         rand: &mut Rand,
         shortest: bool,
@@ -513,7 +545,7 @@ impl Ref {
                 self
             ));
         }
-        builder.build_rule(self.ref_idx.unwrap(), output, rand, shortest);
+        builder.build_rule(self.ref_idx.unwrap(), pre_output, output, rand, shortest);
     }
 }
 
@@ -572,7 +604,13 @@ impl Str {
     // no finalize needed
 
     #[inline]
-    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
+    pub fn build(
+        &self,
+        builder: &ItemBuilder,
+        pre_output: &mut Vec<u8>,
+        output: &mut Vec<u8>,
+        rand: &mut Rand,
+    ) {
         let len = ((rand.next() as usize) % self.diff) + self.min;
         let mut res: Vec<u8> = vec![0; len];
         for idx in 0..len {
@@ -631,7 +669,13 @@ impl Int {
     // no finalize needed
 
     #[inline]
-    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
+    pub fn build(
+        &self,
+        builder: &ItemBuilder,
+        pre_output: &mut Vec<u8>,
+        output: &mut Vec<u8>,
+        rand: &mut Rand,
+    ) {
         let val = rand.rand_i64(self.min, self.max);
         builder.direct_build(&val.to_string().as_bytes().to_vec(), output);
     }
@@ -691,6 +735,7 @@ impl Opt {
     pub fn build(
         &self,
         builder: &ItemBuilder,
+        pre_output: &mut Vec<u8>,
         output: &mut Vec<u8>,
         rand: &mut Rand,
         shortest: bool,
@@ -702,7 +747,7 @@ impl Opt {
         if rand_val == 0 {
             return;
         }
-        builder.build(&self.item, output, rand);
+        builder.build(&self.item, pre_output, output, rand);
     }
 
     pub fn calc_ref_length(&mut self, length_calc: &RefLenCalculator) -> usize {
@@ -763,14 +808,20 @@ impl Mul {
     }
 
     #[inline]
-    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
+    pub fn build(
+        &self,
+        builder: &ItemBuilder,
+        pre_output: &mut Vec<u8>,
+        output: &mut Vec<u8>,
+        rand: &mut Rand,
+    ) {
         let num_times = if self.max > self.min {
             rand.rand_usize(self.min, self.max)
         } else {
             self.min
         };
         for _ in 0..num_times {
-            builder.build(&self.item, output, rand);
+            builder.build(&self.item, pre_output, output, rand);
         }
     }
 
@@ -806,7 +857,9 @@ macro_rules! plus {
 // Id
 // ----------------------------------------------------------------------------
 
-/// The Id struct handles both `star!` and `plus!` macros
+/// The Id struct is responsible for generating a new identifier, writing
+/// the value into the output, and adding the identifier as an option of the
+/// specified rule name in the grammar.
 #[derive(Clone)]
 pub struct Id {
     pub rule_name: String,
@@ -878,6 +931,145 @@ macro_rules! id {
 }
 
 // ----------------------------------------------------------------------------
+// PreId
+// ----------------------------------------------------------------------------
+
+pub const PRE_ID: &[u8] = b"%PREID";
+
+/// The Id struct is responsible for generating a new identifier, writing
+/// the value into the output, and adding the identifier as an option of the
+/// specified rule name in the grammar.
+#[derive(Clone)]
+pub struct PreId {
+    pub rule_name: String,
+    rule_idx: Option<usize>,
+    sep: Vec<u8>,
+    items: Vec<Item>,
+    id_indices: Vec<usize>,
+}
+
+impl Convertible for PreId {
+    fn convert(self) -> Item {
+        Item::PreId(self)
+    }
+}
+
+impl fmt::Display for PreId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Id<{}>", self.rule_name)
+    }
+}
+
+impl PreId {
+    #[allow(dead_code)]
+    pub fn new<T, S>(rule_name: T, sep: S) -> Self
+    where
+        T: Into<String>,
+        S: Convertible,
+    {
+        PreId {
+            rule_name: rule_name.into(),
+            rule_idx: None,
+            sep: match sep.convert() {
+                Item::Direct(v) => v,
+                _ => panic!("Separator may only be an Item::Direct"),
+            },
+            items: Vec::new(),
+            id_indices: Vec::new(),
+        }
+    }
+
+    pub fn add_item<T: Convertible>(mut self, item: T) -> Self {
+        self.items.push(item.convert());
+        self
+    }
+
+    pub fn finalize(&mut self, fetcher: &mut RefFetcher) -> bool {
+        let mut res = true;
+        for (idx, item) in self.items.iter_mut().enumerate() {
+            res &= fetcher.finalize(item);
+            if let Item::Direct(v) = item {
+                if v == &PRE_ID {
+                    self.id_indices.push(idx);
+                }
+            }
+        }
+        self.rule_idx = fetcher.get_ref_idx(&self.rule_name);
+        res && self.rule_idx.is_some()
+    }
+
+    pub fn calc_ref_length(&mut self, length_calc: &RefLenCalculator) -> usize {
+        let mut max_ref_length: usize = 0;
+        let mut all_resolved = true;
+        for item in self.items.iter_mut() {
+            let ref_len = length_calc.calc_ref_length(item);
+            if ref_len == 0 {
+                all_resolved = false;
+            } else if ref_len > max_ref_length {
+                max_ref_length = ref_len;
+            }
+        }
+        if all_resolved {
+            max_ref_length
+        } else {
+            0
+        }
+    }
+
+    #[inline]
+    pub fn build(
+        &self,
+        builder: &ItemBuilder,
+        pre_output: &mut Vec<u8>,
+        output: &mut Vec<u8>,
+        rand: &mut Rand,
+    ) -> String {
+        // [10-20)
+        let rand_len = ((rand.next() as usize) % 10) + 10;
+        let mut res: Vec<u8> = vec![0; rand_len];
+        let charset = "abcdefghijklmnopqrstuvwxyz".as_bytes();
+        let len = charset.len();
+        for idx in 0..rand_len {
+            let rand_idx = (rand.next() as usize) % len;
+            res[idx] = charset[rand_idx];
+        }
+
+        // do the pre-build
+        let mut tmp_output: Vec<u8> = Vec::new();
+        for (idx, item) in self.items.iter().enumerate() {
+            if self.sep.len() > 0 && idx > 0 {
+                builder.direct_build(&self.sep, output);
+            }
+            if self.id_indices.contains(&idx) {
+                builder.direct_build(&res, &mut tmp_output);
+            } else {
+                builder.build(item, pre_output, &mut tmp_output, rand);
+            }
+        }
+        pre_output.extend(&tmp_output);
+
+        builder.direct_build(&res, output);
+        String::from_utf8(res).expect("Invalid UTF8 somehow")
+    }
+}
+
+/// The `pre_id!(rule="rule_name", sep=")` macro creates a new random value that is stored as
+/// an option for `rule_name` *and* is written to the output buffer. Values
+/// generated by `id!("rule_name")` are accessible immediately after they are
+/// created.
+///
+/// **HOWEVER**, it is up to the user to ensure that the destination rule of the
+/// `id!()` is valid at the time of reference. Eventually resmack may address
+/// this.
+#[macro_export]
+macro_rules! pre_id {
+    (rule=$rule_name:expr, sep=$sep:expr, $($item:expr),*) => {
+        crate::fields::PreId::new($rule_name, $sep)
+            $(.add_item($item))*
+    };
+}
+
+// ----------------------------------------------------------------------------
 // Scope
 // ----------------------------------------------------------------------------
 
@@ -913,8 +1105,14 @@ impl Scoped {
     }
 
     #[inline]
-    pub fn build(&self, builder: &ItemBuilder, output: &mut Vec<u8>, rand: &mut Rand) {
-        builder.build(&self.item, output, rand);
+    pub fn build(
+        &self,
+        builder: &ItemBuilder,
+        pre_output: &mut Vec<u8>,
+        output: &mut Vec<u8>,
+        rand: &mut Rand,
+    ) {
+        builder.build(&self.item, pre_output, output, rand);
     }
 }
 
@@ -945,16 +1143,20 @@ mod tests {
             let rules = Rc::new(RefCell::new(Box::new(RuleList::new())));
             let item_builder: ItemBuilder = ItemBuilder::new(rules, 10);
             let mut rand = Rand::new(since_the_epoch.as_secs());
+            let mut tmp_pre_vec: Vec<u8> = Vec::new();
             let mut tmp_vec: Vec<u8> = Vec::new();
-            item_builder.build(&$item.convert(), &mut tmp_vec, &mut rand);
-            str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
+            item_builder.build(&$item.convert(), &mut tmp_pre_vec, &mut tmp_vec, &mut rand);
+            tmp_pre_vec.extend(&tmp_vec);
+            str::from_utf8(&tmp_pre_vec[..]).unwrap().to_owned()
         }};
         (rand=$rand:expr, $item:expr) => {{
             let rules = Rc::new(RefCell::new(Box::new(RuleList::new())));
             let item_builder: ItemBuilder = ItemBuilder::new(rules, 10);
+            let mut tmp_pre_vec: Vec<u8> = Vec::new();
             let mut tmp_vec: Vec<u8> = Vec::new();
-            item_builder.build(&$item.convert(), &mut tmp_vec, &mut $rand);
-            str::from_utf8(&tmp_vec[..]).unwrap().to_owned()
+            item_builder.build(&$item.convert(), &mut tmp_pre_vec, &mut tmp_vec, &mut $rand);
+            tmp_pre_vec.extend(&tmp_vec);
+            str::from_utf8(&tmp_pre_vec[..]).unwrap().to_owned()
         }};
     }
 
