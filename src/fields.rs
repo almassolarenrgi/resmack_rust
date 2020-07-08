@@ -356,7 +356,8 @@ impl fmt::Display for Or {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "Or<{}>",
+            "Or<keep={:?} {}>",
+            self.keep,
             self.choices
                 .iter()
                 .map(|x| format!("{}", x))
@@ -420,9 +421,9 @@ impl Or {
         for item_idx in self.choice_indices.iter_mut() {
             let item = self.choices.get_mut(*item_idx).unwrap();
             // these should *NEVER* be used in shortest=true build situations
-            if let Item::PreId(_) = item {
-                continue;
-            }
+            //if let Item::PreId(_) = item {
+            //    continue;
+            //}
             let ref_len = length_calc.calc_ref_length(item);
             ref_lengths.insert(*item_idx, ref_len);
             if ref_len < min_ref_length && ref_len != 0 {
