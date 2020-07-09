@@ -175,7 +175,7 @@ impl ItemBuilder {
         loop {
             rules = {
                 let rules_b = rules.borrow();
-                if rules_b.rules[rule_idx].borrow().choices.len() > 0 {
+                if rules_b.rules[rule_idx].borrow().choice_indices.len() > 0 {
                     options.push(rules.clone());
                 }
                 if rules_b.parent.is_none() {
@@ -356,7 +356,8 @@ impl fmt::Display for Or {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "Or<{}>",
+            "Or<keep={:?} {}>",
+            self.keep,
             self.choices
                 .iter()
                 .map(|x| format!("{}", x))
@@ -373,6 +374,15 @@ impl Or {
             choice_indices: Vec::new(),
             shortest_options: Vec::new(),
             keep: false,
+        }
+    }
+
+    pub fn new_keep() -> Or {
+        Or {
+            choices: Vec::new(),
+            choice_indices: Vec::new(),
+            shortest_options: Vec::new(),
+            keep: true,
         }
     }
 
@@ -410,6 +420,10 @@ impl Or {
 
         for item_idx in self.choice_indices.iter_mut() {
             let item = self.choices.get_mut(*item_idx).unwrap();
+            // these should *NEVER* be used in shortest=true build situations
+            //if let Item::PreId(_) = item {
+            //    continue;
+            //}
             let ref_len = length_calc.calc_ref_length(item);
             ref_lengths.insert(*item_idx, ref_len);
             if ref_len < min_ref_length && ref_len != 0 {
@@ -436,14 +450,9 @@ impl Or {
 
     #[inline]
     pub fn get_item(&self, rand: &mut Rand, shortest: bool) -> &Item {
-        let choice_idx = if shortest {
-            if self.shortest_options.len() == 0 {
-                println!("NO OPTIONS!");
-                println!("CHOSEN OPTIONS");
-                self.print_options(false, "  - ");
-                println!("ALL OPTIONS");
-                self.print_options(true, "  - ");
-            }
+        // keep = true means that this is a dynamic Or, which means that all
+        // items will be Item::Direct
+        let choice_idx = if shortest && self.shortest_options.len() > 0 {
             self.shortest_options[(rand.next() as usize) % self.shortest_options.len()]
         } else {
             self.choice_indices[(rand.next() as usize) % self.choice_indices.len()]
@@ -457,15 +466,18 @@ impl Or {
         self
     }
 
-    pub fn print_options(&self, all_options: bool, prefix: &str) {
+    pub fn print_options(&self, shortest: bool, prefix: &str) {
         let print_opt = |opt| println!("{}{}", prefix, opt);
 
-        if all_options {
-            for opt in self.choices.iter() {
-                print_opt(opt);
+        println!("{}keep: {:?}", prefix, self.keep);
+        println!("{}shortest: {:?}", prefix, shortest);
+
+        if !shortest {
+            for opt_idx in self.choice_indices.iter() {
+                print_opt(&self.choices[*opt_idx]);
             }
         } else {
-            for opt_idx in self.choice_indices.iter() {
+            for opt_idx in self.shortest_options.iter() {
                 print_opt(&self.choices[*opt_idx]);
             }
         }
@@ -523,7 +535,11 @@ impl Ref {
     }
 
     pub fn calc_ref_length(&mut self, length_calc: &RefLenCalculator) -> usize {
-        let refd_len = match length_calc.get_ref_len(self.ref_idx.unwrap()) {
+        let ref_idx = match self.ref_idx {
+            Some(v) => v,
+            None => panic!(format!("Rule {:?} was never resolved", self.ref_rule)),
+        };
+        let refd_len = match length_calc.get_ref_len(ref_idx) {
             Some(v) => v,
             None => return 0,
         };
@@ -607,7 +623,7 @@ impl Str {
     pub fn build(
         &self,
         builder: &ItemBuilder,
-        pre_output: &mut Vec<u8>,
+        _pre_output: &mut Vec<u8>,
         output: &mut Vec<u8>,
         rand: &mut Rand,
     ) {
@@ -956,7 +972,7 @@ impl Convertible for PreId {
 
 impl fmt::Display for PreId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Id<{}>", self.rule_name)
+        write!(f, "PreId<rule={}>", self.rule_name)
     }
 }
 
@@ -984,7 +1000,8 @@ impl PreId {
         self
     }
 
-    pub fn finalize(&mut self, fetcher: &mut RefFetcher) -> bool {
+    /// Returns a tuple of bools: `(items_finalized, ref_finalized)`
+    pub fn finalize(&mut self, fetcher: &mut RefFetcher) -> (bool, bool) {
         let mut res = true;
         for (idx, item) in self.items.iter_mut().enumerate() {
             res &= fetcher.finalize(item);
@@ -995,7 +1012,7 @@ impl PreId {
             }
         }
         self.rule_idx = fetcher.get_ref_idx(&self.rule_name);
-        res && self.rule_idx.is_some()
+        (res, self.rule_idx.is_some())
     }
 
     pub fn calc_ref_length(&mut self, length_calc: &RefLenCalculator) -> usize {
@@ -1010,6 +1027,8 @@ impl PreId {
             }
         }
         if all_resolved {
+            // should always be one more than what the items say. PreId is
+            // basically a double-ref
             max_ref_length
         } else {
             0

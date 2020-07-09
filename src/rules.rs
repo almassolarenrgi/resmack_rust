@@ -38,7 +38,7 @@ impl RuleList {
             };
             rules.parent = res_parent;
             for _ in 0..parent_num_rules {
-                rules.add_empty_rule();
+                rules.add_empty_rule(true);
             }
         }
         Rc::new(RefCell::new(Box::new(rules)))
@@ -57,9 +57,13 @@ impl RuleList {
 
     /// Push a new empty rule into `self.rules`, returning the index of the
     /// new, empty rule
-    pub fn add_empty_rule(&mut self) -> usize {
+    pub fn add_empty_rule(&mut self, keep: bool) -> usize {
         let res = self.rules.len();
-        self.rules.push(RefCell::new(Or::new()));
+        if keep {
+            self.rules.push(RefCell::new(Or::new_keep()));
+        } else {
+            self.rules.push(RefCell::new(Or::new()));
+        }
         res
     }
 
@@ -75,12 +79,13 @@ fn add_empty_rule_or<T>(
     rule_name: T,
     rule_map: &mut BTreeMap<String, usize>,
     rule_map_inv: &mut BTreeMap<usize, String>,
+    keep: bool,
 ) -> usize
 where
     T: Into<String>,
 {
     let rule_name = rule_name.into();
-    let res = rules.add_empty_rule();
+    let res = rules.add_empty_rule(keep);
     rule_map.insert(rule_name.clone(), res);
     rule_map_inv.insert(res, rule_name);
     res
@@ -117,6 +122,7 @@ impl RuleSet {
                     rule_name,
                     &mut self.rule_map,
                     &mut self.rule_map_inv,
+                    false,
                 ),
                 Some(v) => *v,
             };
@@ -128,7 +134,7 @@ impl RuleSet {
     pub fn finalize(&mut self) {
         loop {
             let mut num_pruned: usize = 0;
-            num_pruned += self.finalize_and_prune_rules();
+            num_pruned += self.resolve_reachability();
             println!("finalize pruned {}", num_pruned);
             num_pruned += self.calc_shortest_ref_length();
             println!("shortest ref pruned {}", num_pruned);
@@ -136,14 +142,21 @@ impl RuleSet {
                 break;
             }
         }
+        println!("Final rules");
+        for (rule_name, rule_idx) in self.rule_map.iter() {
+            println!("{:4} {}", rule_idx, rule_name);
+        }
     }
 
-    pub fn finalize_and_prune_rules(&mut self) -> usize {
-        println!("Finalizing and pruning rules");
+    pub fn resolve_reachability(&mut self) -> usize {
+        println!("Resolving reachability of all rules");
         let mut total_pruned = 0;
         let mut new_rules: HashSet<(usize, String)> = HashSet::new();
         let mut to_prune: HashSet<String> = HashSet::new();
+        let mut pruned: HashSet<String> = HashSet::new();
         loop {
+            println!("---------------------------");
+
             new_rules.clear();
             to_prune.clear();
             for (rule_idx, rule_or) in self.rules.borrow_mut().rules.iter_mut().enumerate() {
@@ -157,7 +170,15 @@ impl RuleSet {
                 let finalized = {
                     let mut fetcher = RefFetcher::new(&self.rule_map);
                     let res = rule_or.finalize(&mut fetcher);
+                    println!("Resolved? {:?} - {}", res, rule_or);
                     for rule_name in fetcher.new_rules.iter() {
+                        // an infinite loop can occur without this check where
+                        // new rules referenced by an id!() are added, and then
+                        // in the next pass are removed by to_prune because
+                        // of unresolvable references.
+                        if pruned.contains(rule_name) {
+                            continue;
+                        }
                         new_rules.insert((rule_idx, rule_name.clone()));
                     }
                     res
@@ -165,6 +186,7 @@ impl RuleSet {
 
                 // rule Or has no options left, everything is unresolvable
                 if !finalized && !rule_or.keep {
+                    println!("  Queued for pruning");
                     to_prune.insert(rule_name.clone());
                 }
             }
@@ -178,6 +200,7 @@ impl RuleSet {
                         rule_name,
                         &mut self.rule_map,
                         &mut self.rule_map_inv,
+                        true,
                     );
                     println!("  Added new rule: {}, at {}", rule_name, idx);
                     self.rules
@@ -196,6 +219,7 @@ impl RuleSet {
                     rule_to_prune
                 );
                 self.rule_map.remove(rule_to_prune);
+                pruned.insert(rule_to_prune.clone());
                 total_pruned += 1;
             }
         }
@@ -203,7 +227,6 @@ impl RuleSet {
     }
 
     pub fn calc_shortest_ref_length(&mut self) -> usize {
-        println!("Calculating shortest ref lengths");
         let mut rule_lengths: BTreeMap<usize, usize> = BTreeMap::new();
         let mut total_pruned = 0;
         let rules = self.rules.borrow();
@@ -365,13 +388,17 @@ impl<'a> RefFetcher<'a> {
                 true
             }
             Item::PreId(v) => {
-                let res = v.finalize(self);
-                if !res {
-                    println!("  {} did not finalize, adding as new rule", v);
-                    println!("    (should finalize next loop)");
-                    self.new_rules.push(v.rule_name.clone());
+                let (items_finalized, ref_finalized) = v.finalize(self);
+                if !items_finalized {
+                    false
+                } else {
+                    if !ref_finalized {
+                        println!("  {} did not finalize, adding as new rule", v);
+                        println!("    (should finalize next loop)");
+                        self.new_rules.push(v.rule_name.clone());
+                    }
+                    true
                 }
-                true
             }
         }
     }
