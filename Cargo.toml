@@ -16,6 +16,7 @@ rand_chacha = "*"
 rand_pcg = "*"
 rand_isaac = "*"
 rand_hc = "*"
+regex = "1"
 
 [[bench]]
 name = "prngs"
