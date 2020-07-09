@@ -25,6 +25,7 @@ pub enum Item {
     Mul(Mul),
     Id(Id),
     PreId(PreId),
+    PreFlush,
     Scoped(Scoped),
 }
 
@@ -41,6 +42,7 @@ impl fmt::Display for Item {
             Item::Mul(v) => v.fmt(f),
             Item::Id(v) => v.fmt(f),
             Item::PreId(v) => v.fmt(f),
+            Item::PreFlush => write!(f, "PreFlush"),
             Item::Scoped(v) => v.fmt(f),
         }
     }
@@ -57,6 +59,14 @@ impl<'a> Convertible for String {
     #[inline]
     fn convert(self) -> Item {
         Item::Direct(self.as_bytes().to_vec())
+    }
+}
+
+/// Converts `String` to an Item::Direct instance
+impl<'a> Convertible for Item {
+    #[inline]
+    fn convert(self) -> Item {
+        self
     }
 }
 
@@ -149,6 +159,10 @@ impl ItemBuilder {
                 self.rules.borrow().rules[rule_idx]
                     .borrow_mut()
                     .add_item(built_id);
+            }
+            Item::PreFlush => {
+                pre_output.extend(&output[..]);
+                output.clear();
             }
             Item::Scoped(v) => {
                 let scoped_rules = RuleList::new_from_parent(Some(self.rules.clone()));
@@ -1085,6 +1099,16 @@ macro_rules! pre_id {
     (rule=$rule_name:expr, sep=$sep:expr, $($item:expr),*) => {
         crate::fields::PreId::new($rule_name, $sep)
             $(.add_item($item))*
+    };
+}
+
+/// The `pre_flush!()` macro causes the current pre_output and output to be
+/// concatenated together. If not manually performed, this will only occur
+/// at the end of a top-level `build_rule()` call on a `RuleSet` instance.
+#[macro_export]
+macro_rules! pre_flush {
+    () => {
+        crate::fields::Item::PreFlush
     };
 }
 
