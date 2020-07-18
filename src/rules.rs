@@ -431,6 +431,7 @@ impl<'a> RefFetcher<'a> {
                     true
                 }
             }
+            Item::PreFlush => true,
         }
     }
 
@@ -446,10 +447,13 @@ impl<'a> RefFetcher<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::str;
+
+    use regex::Regex;
+
     use super::*;
     use crate::fields::PRE_ID;
     use crate::random::Rand;
-    use std::str;
 
     #[test]
     fn test_rule_set() {
@@ -656,6 +660,33 @@ mod tests {
                 var20 = get_id(rules, "20".to_string()),
             )
         );
+    }
+
+    #[test]
+    fn test_pre_flush() {
+        let mut rules = RuleSet::new();
+        #[rustfmt::skip]
+        let rules = rules
+            .add_rule("var_10", pre_id!(rule="10", sep="",
+                "var ", PRE_ID, " = 10; "
+            ))
+            .add_rule("var_20", pre_id!(rule="20", sep="",
+                "var ", PRE_ID, " = ", reff!("var_10"), " + 10; "
+            ))
+            .add_rule("plus_eq_two", and!(pre_flush!(), reff!("var_20"), " += 2;", pre_flush!()))
+            .add_rule("two_plus_twos", and!(reff!("plus_eq_two"), "\n", reff!("plus_eq_two")));
+        rules.finalize();
+
+        let mut output: Vec<u8> = Vec::new();
+        let mut rand: Rand = Rand::new(100);
+        rules.build_rule_slow("two_plus_twos", &mut output, &mut rand, 10, true);
+        // var ytficfdidqo = 10; var dtxlhgbihrwxnzom = ytficfdidqo + 10; dtxlhgbihrwxnzom += 2;
+        let output = str::from_utf8(&output).unwrap();
+        println!("output: \n\n{}", output);
+        let reg =
+            Regex::new(r"(var [a-z]+ = 10; var [a-z]+ = [a-z]+ \+ 10; [a-z]+ \+= 2;\n?){2,2}")
+                .unwrap();
+        assert_eq!(reg.is_match(output), true);
     }
 
     #[test]
