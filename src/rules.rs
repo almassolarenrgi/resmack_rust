@@ -132,31 +132,32 @@ impl RuleSet {
     }
 
     pub fn finalize(&mut self) {
+        let mut unresolved_refs: HashSet<String> = HashSet::new();
+        let mut pruned: HashSet<String> = HashSet::new();
+
         loop {
+            println!("-----------------");
             let mut num_pruned: usize = 0;
-            num_pruned += self.resolve_reachability();
+            num_pruned += self.resolve_reachability(&mut unresolved_refs, &mut pruned);
             println!("finalize pruned {}", num_pruned);
-            num_pruned += self.calc_shortest_ref_length();
+            num_pruned += self.calc_shortest_ref_length(&mut unresolved_refs);
             println!("shortest ref pruned {}", num_pruned);
             if num_pruned == 0 {
                 break;
             }
         }
-        println!("Final rules");
-        for (rule_name, rule_idx) in self.rule_map.iter() {
-            println!("{:4} {}", rule_idx, rule_name);
-        }
     }
 
-    pub fn resolve_reachability(&mut self) -> usize {
+    pub fn resolve_reachability(
+        &mut self,
+        unresolved_refs: &mut HashSet<String>,
+        pruned: &mut HashSet<String>,
+    ) -> usize {
         println!("Resolving reachability of all rules");
         let mut total_pruned = 0;
         let mut new_rules: HashSet<(usize, String)> = HashSet::new();
         let mut to_prune: HashSet<String> = HashSet::new();
-        let mut pruned: HashSet<String> = HashSet::new();
         loop {
-            println!("---------------------------");
-
             new_rules.clear();
             to_prune.clear();
             for (rule_idx, rule_or) in self.rules.borrow_mut().rules.iter_mut().enumerate() {
@@ -167,27 +168,30 @@ impl RuleSet {
                     continue;
                 }
 
-                let finalized = {
+                {
                     let mut fetcher = RefFetcher::new(&self.rule_map);
-                    let res = rule_or.finalize(&mut fetcher);
-                    println!("Resolved? {:?} - {}", res, rule_or);
+                    let finalized = rule_or.finalize(&mut fetcher);
                     for rule_name in fetcher.new_rules.iter() {
                         // an infinite loop can occur without this check where
                         // new rules referenced by an id!() are added, and then
                         // in the next pass are removed by to_prune because
                         // of unresolvable references.
                         if pruned.contains(rule_name) {
+                            println!("reach: pruned already contains {}", rule_name);
                             continue;
                         }
                         new_rules.insert((rule_idx, rule_name.clone()));
                     }
-                    res
-                };
 
-                // rule Or has no options left, everything is unresolvable
-                if !finalized && !rule_or.keep {
-                    println!("  Queued for pruning");
-                    to_prune.insert(rule_name.clone());
+                    // rule Or has no options left, everything is unresolvable
+                    if !finalized && !rule_or.keep && !pruned.contains(rule_name) {
+                        to_prune.insert(rule_name.clone());
+                        println!("reach: Pruning {:?} due to unresolved refs:", rule_name);
+                        for reff in fetcher.unresolved_refs.iter() {
+                            println!("  {:?}", reff);
+                            //unresolved_refs.insert(reff.clone());
+                        }
+                    }
                 }
             }
             if to_prune.len() == 0 && new_rules.len() == 0 {
@@ -202,7 +206,6 @@ impl RuleSet {
                         &mut self.rule_map_inv,
                         true,
                     );
-                    println!("  Added new rule: {}, at {}", rule_name, idx);
                     self.rules
                         .borrow()
                         .rules
@@ -214,10 +217,6 @@ impl RuleSet {
                 continue;
             }
             for rule_to_prune in to_prune.iter() {
-                println!(
-                    "Pruning rule {} due to unresolvable references",
-                    rule_to_prune
-                );
                 self.rule_map.remove(rule_to_prune);
                 pruned.insert(rule_to_prune.clone());
                 total_pruned += 1;
@@ -226,33 +225,46 @@ impl RuleSet {
         total_pruned
     }
 
-    pub fn calc_shortest_ref_length(&mut self) -> usize {
+    pub fn calc_shortest_ref_length(&mut self, unresolved_refs: &mut HashSet<String>) -> usize {
+        println!("Calculating shortest ref lengths");
+
         let mut rule_lengths: BTreeMap<usize, usize> = BTreeMap::new();
         let mut total_pruned = 0;
         let rules = self.rules.borrow();
 
+        let mut prune_reasons: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
         loop {
+            prune_reasons.clear();
             let mut num_resolved: usize = 0;
             // we only iterate over the rules with resolvable references
             for (_, rule_idx) in self.rule_map.iter() {
+                let rule_name = self.rule_map_inv[rule_idx].clone();
                 let mut rule_or = rules.rules[*rule_idx].borrow_mut();
 
                 let num_options_before = rule_or.shortest_options.len();
+                let rule_lengths_before = rule_lengths.len();
                 let length_calc = RefLenCalculator {
                     rule_lengths: &rule_lengths,
+                    unresolved_refs: RefCell::new(HashSet::new()),
                 };
                 let new_len = rule_or.calc_ref_length(&length_calc);
                 if new_len != 0 {
                     rule_lengths.insert(*rule_idx, new_len);
+                } else {
+                    prune_reasons.insert(
+                        rule_name,
+                        length_calc
+                            .unresolved_refs
+                            .borrow()
+                            .iter()
+                            .map(|v| v.clone())
+                            .collect::<Vec<String>>()
+                            .to_vec(),
+                    );
                 }
                 let num_options = rule_or.shortest_options.len();
-                if num_options > num_options_before {
-                    println!(
-                        "Resolved {} new options for {}, total {}",
-                        num_options - num_options_before,
-                        self.rule_map_inv[rule_idx],
-                        num_options
-                    );
+                if rule_lengths.len() > rule_lengths_before || num_options > num_options_before {
                     num_resolved += 1;
                 }
             }
@@ -270,10 +282,14 @@ impl RuleSet {
             {
                 continue;
             }
+            let rule_name = &self.rule_map_inv[&rule_idx];
             println!(
-                "Pruning rule {} due to undeterminable reference length",
-                self.rule_map_inv[&rule_idx]
+                "reflen: Pruning rule {} due to undeterminable reference lengths:",
+                rule_name,
             );
+            for prune_reason in prune_reasons[rule_name].iter() {
+                println!("    {}", prune_reason);
+            }
             self.rule_map.remove(&self.rule_map_inv[&rule_idx]);
             total_pruned += 1;
         }
@@ -329,6 +345,7 @@ impl RuleSet {
 
 pub struct RefLenCalculator<'a> {
     rule_lengths: &'a BTreeMap<usize, usize>,
+    unresolved_refs: RefCell<HashSet<String>>,
 }
 
 impl<'a> RefLenCalculator<'a> {
@@ -336,7 +353,13 @@ impl<'a> RefLenCalculator<'a> {
         match item {
             Item::And(v) => v.calc_ref_length(self),
             Item::Or(v) => v.calc_ref_length(self),
-            Item::Ref(v) => v.calc_ref_length(self),
+            Item::Ref(v) => {
+                let res = v.calc_ref_length(self);
+                if res == 0 {
+                    self.unresolved_refs.borrow_mut().insert(v.ref_rule.clone());
+                }
+                res
+            }
             Item::Opt(v) => v.calc_ref_length(self),
             Item::Mul(v) => v.calc_ref_length(self),
             Item::Id(v) => v.calc_ref_length(self),
@@ -356,6 +379,7 @@ impl<'a> RefLenCalculator<'a> {
 pub struct RefFetcher<'a> {
     pub rule_map: &'a BTreeMap<String, usize>,
     pub new_rules: Vec<String>,
+    pub unresolved_refs: HashSet<String>,
 }
 
 impl<'a> RefFetcher<'a> {
@@ -363,6 +387,7 @@ impl<'a> RefFetcher<'a> {
         RefFetcher {
             rule_map,
             new_rules: Vec::new(),
+            unresolved_refs: HashSet::new(),
         }
     }
 
@@ -370,7 +395,13 @@ impl<'a> RefFetcher<'a> {
     pub fn finalize(&mut self, item: &mut Item) -> bool {
         match item {
             Item::And(v) => v.finalize(self),
-            Item::Ref(v) => v.finalize(self),
+            Item::Ref(v) => {
+                let res = v.finalize(self);
+                if !res {
+                    self.unresolved_refs.insert(v.ref_rule.clone());
+                }
+                res
+            }
             Item::Or(v) => v.finalize(self),
             Item::Opt(v) => v.finalize(self),
             Item::Mul(v) => v.finalize(self),

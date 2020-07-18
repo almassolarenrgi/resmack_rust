@@ -31,7 +31,17 @@ pub enum Item {
 impl fmt::Display for Item {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Item::Direct(v) => write!(f, "u8[{}]", str::from_utf8(v).unwrap()),
+            Item::Direct(v) => write!(
+                f,
+                "u8[{}]",
+                std::str::from_utf8(
+                    &v.iter()
+                        .map(|b| std::ascii::escape_default(*b))
+                        .flatten()
+                        .collect::<Vec<u8>>()
+                )
+                .unwrap()
+            ),
             Item::And(v) => v.fmt(f),
             Item::Or(v) => v.fmt(f),
             Item::Ref(v) => v.fmt(f),
@@ -129,7 +139,8 @@ impl ItemBuilder {
             Item::And(v) => v.build(self, pre_output, output, rand),
             Item::Ref(v) => {
                 self.curr_depth.set(self.curr_depth.get() + 1);
-                v.build(self, pre_output, output, rand, shortest)
+                v.build(self, pre_output, output, rand, shortest);
+                self.curr_depth.set(self.curr_depth.get() - 1);
             }
             Item::Or(v) => v.build(self, pre_output, output, rand, shortest),
             Item::Opt(v) => v.build(self, pre_output, output, rand, shortest),
@@ -324,11 +335,11 @@ impl And {
 #[macro_export]
 macro_rules! and {
     (sep = $sep:expr, $($item:expr),*) => {
-        crate::fields::And::new($sep)
+        $crate::fields::And::new($sep)
             $(.add_item($item))*
     };
     ($($item:expr),*) => {
-        crate::fields::And::new("")
+        $crate::fields::And::new("")
             $(.add_item($item))*
     };
 }
@@ -488,7 +499,7 @@ impl Or {
 macro_rules! or {
     ($($item:expr),*) => {
         {
-            let mut tmp = crate::fields::Or::new();
+            let mut tmp = $crate::fields::Or::new();
             $(tmp.add_item($item);)*
             tmp
         }
@@ -541,8 +552,11 @@ impl Ref {
         };
         let refd_len = match length_calc.get_ref_len(ref_idx) {
             Some(v) => v,
-            None => return 0,
+            None => 0,
         };
+        if refd_len == 0 {
+            return 0;
+        }
         refd_len + 1
     }
 
@@ -568,7 +582,7 @@ impl Ref {
 #[macro_export]
 macro_rules! reff {
     ($ref:expr) => {
-        crate::fields::Ref::new($ref)
+        $crate::fields::Ref::new($ref)
     };
 }
 
@@ -640,7 +654,7 @@ impl Str {
 #[macro_export]
 macro_rules! string {
     (min = $min:expr, max = $max:expr, charset = $charset:expr) => {
-        crate::fields::Str::new($min, $max, $charset)
+        $crate::fields::Str::new($min, $max, $charset)
     };
     (max = $max: expr, charset = $charset:expr) => {
         string!(min = 0, max = $max, charset = $charset)
@@ -700,7 +714,7 @@ impl Int {
 #[macro_export]
 macro_rules! int {
     (min = $min:expr, max = $max:expr) => {
-        crate::fields::Int::new($min, $max)
+        $crate::fields::Int::new($min, $max)
     };
     (max = $max: expr) => {
         int!(min = 0, max = $max)
@@ -778,7 +792,7 @@ impl Opt {
 #[macro_export]
 macro_rules! opt {
     ($item:expr) => {
-        crate::fields::Opt::new($item)
+        $crate::fields::Opt::new($item)
     };
 }
 
@@ -849,13 +863,13 @@ impl Mul {
 #[macro_export]
 macro_rules! star {
     (min=$min:expr, max=$max:expr, $item:expr) => {
-        crate::fields::Mul::new($item, $min, $max)
+        $crate::fields::Mul::new($item, $min, $max)
     };
     (max=$max:expr, $item:expr) => {
-        crate::fields::Mul::new($item, 0, $max)
+        $crate::fields::Mul::new($item, 0, $max)
     };
     ($item:expr) => {
-        crate::fields::Mul::new($item, 0, 10)
+        $crate::fields::Mul::new($item, 0, 10)
     };
 }
 
@@ -942,7 +956,7 @@ impl Id {
 #[macro_export]
 macro_rules! id {
     ($rule_name:expr) => {
-        crate::fields::Id::new($rule_name)
+        $crate::fields::Id::new($rule_name)
     };
 }
 
@@ -1004,13 +1018,15 @@ impl PreId {
     pub fn finalize(&mut self, fetcher: &mut RefFetcher) -> (bool, bool) {
         let mut res = true;
         for (idx, item) in self.items.iter_mut().enumerate() {
-            res &= fetcher.finalize(item);
+            let item_res = fetcher.finalize(item);
+            res &= item_res;
             if let Item::Direct(v) = item {
                 if v == &PRE_ID {
                     self.id_indices.push(idx);
                 }
             }
         }
+
         self.rule_idx = fetcher.get_ref_idx(&self.rule_name);
         (res, self.rule_idx.is_some())
     }
@@ -1083,8 +1099,18 @@ impl PreId {
 #[macro_export]
 macro_rules! pre_id {
     (rule=$rule_name:expr, sep=$sep:expr, $($item:expr),*) => {
-        crate::fields::PreId::new($rule_name, $sep)
+        $crate::fields::PreId::new($rule_name, $sep)
             $(.add_item($item))*
+    };
+}
+
+/// The `pre_flush!()` macro causes the current pre_output and output to be
+/// concatenated together. If not manually performed, this will only occur
+/// at the end of a top-level `build_rule()` call on a `RuleSet` instance.
+#[macro_export]
+macro_rules! pre_flush {
+    () => {
+        $crate::fields::Item::PreFlush
     };
 }
 
@@ -1138,7 +1164,7 @@ impl Scoped {
 #[macro_export]
 macro_rules! scoped {
     ($item:expr) => {
-        crate::fields::Scoped::new($item)
+        $crate::fields::Scoped::new($item)
     };
 }
 
