@@ -348,11 +348,11 @@ impl And {
 
 #[macro_export]
 macro_rules! and {
-    (sep = $sep:expr, $($item:expr),*) => {
+    (sep = $sep:expr, $($item:expr),* $(,)?) => {
         $crate::fields::And::new($sep)
             $(.add_item($item))*
     };
-    ($($item:expr),*) => {
+    ($($item:expr),* $(,)?) => {
         $crate::fields::And::new("")
             $(.add_item($item))*
     };
@@ -511,7 +511,7 @@ impl Or {
 
 #[macro_export]
 macro_rules! or {
-    ($($item:expr),*) => {
+    ($($item:expr),* $(,)?) => {
         {
             let mut tmp = $crate::fields::Or::new();
             $(tmp.add_item($item);)*
@@ -551,6 +551,17 @@ impl Ref {
         Ref {
             ref_rule: ref_rule.into(),
             ref_idx: None,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn new_with_idx<T>(ref_rule: T, idx: usize) -> Ref
+    where
+        T: Into<String>,
+    {
+        Ref {
+            ref_rule: ref_rule.into(),
+            ref_idx: Some(idx),
         }
     }
 
@@ -1112,7 +1123,7 @@ impl PreId {
 /// this.
 #[macro_export]
 macro_rules! pre_id {
-    (rule=$rule_name:expr, sep=$sep:expr, $($item:expr),*) => {
+    (rule=$rule_name:expr, sep=$sep:expr, $($item:expr),* $(,)?) => {
         $crate::fields::PreId::new($rule_name, $sep)
             $(.add_item($item))*
     };
