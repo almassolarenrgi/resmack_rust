@@ -1,4 +1,4 @@
-extern crate rand;
+metering crate rand;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 
